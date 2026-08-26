@@ -118,6 +118,10 @@ enum Offsets {
     // (Slot numbers are the method-registry index per `docs/raw_methods.txt`.)
     FUN_SCRIPT_GAMETOOLTIP_SET_HYPERLINK = 0x00531FD0, // slot 12
     FUN_SCRIPT_GAMETOOLTIP_SET_INVENTORY_ITEM = 0x00532EE0, // slot 19
+    // `GetInventoryItemLink(unit, slot)` Lua C function. For remote player
+    // units it reads the visible-items entry and historically truncates the
+    // Random Property value to 16 bits.
+    FUN_SCRIPT_GET_INVENTORY_ITEM_LINK = 0x004C8C10,
     FUN_SCRIPT_GAMETOOLTIP_SET_UNIT_BUFF = 0x00534AC0, // slot 32
     FUN_SCRIPT_GAMETOOLTIP_SET_UNIT_DEBUFF = 0x00534E30, // slot 33
     FUN_SCRIPT_GAMETOOLTIP_SET_TALENT = 0x00535170, // slot 34
@@ -1284,6 +1288,12 @@ enum Offsets {
     // first; we do the same in `Item::InventoryID`.
     FUN_UNIT_GET_VISIBLE_ITEM = 0x005F0D60,
     OFF_VISIBLE_ITEM_ITEM_ID = 0x08,
+    // Full uint32 Random Property value in a visible-item entry. The
+    // server writes PLAYER_VISIBLE_ITEM_*_PROPERTIES here; the client-side
+    // TWO_SHORT descriptor is what used to make the ordinary link path read
+    // only the low 16 bits.
+    OFF_VISIBLE_ITEM_PROPERTIES = 0x28,
+    OFF_VISIBLE_ITEM_PAD = 0x2C,
 
     // CGUnit m_objectFields pointer offset. Different from CGItem's
     // descriptor at +0x114 — these are sibling classes under CGObject

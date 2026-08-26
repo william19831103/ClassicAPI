@@ -89,6 +89,34 @@ bool BasicFromIDSuffix(uint32_t itemID, int suffixID, char *out, size_t outSize)
     return n > 0 && static_cast<size_t>(n) < outSize;
 }
 
+bool BasicFromIDProperty(uint32_t itemID, uint32_t property, char *out,
+                         size_t outSize) {
+    if (out == nullptr || outSize == 0)
+        return false;
+    const uint8_t *record = Item::PeekRecord(itemID);
+    if (record == nullptr)
+        return false;
+
+    // The visible-item value may be a custom GUIDLow rather than a real
+    // ItemRandomProperties row. Do not pass it to the engine's name helper as
+    // a DBC index; use the cached base name and preserve the raw value only
+    // in the link payload.
+    const char *base = *reinterpret_cast<const char *const *>(
+        record + Offsets::OFF_ITEMSTATS_NAME);
+    if (base == nullptr || *base == '\0')
+        return false;
+    char name[128];
+    std::snprintf(name, sizeof(name), "%s", base);
+
+    const uint32_t quality = *reinterpret_cast<const uint32_t *>(
+        record + Offsets::OFF_ITEMSTATS_QUALITY);
+    const int n = std::snprintf(out, outSize,
+        "%s|Hitem:%u:0:%u:0:0:0:0:0|h[%s]|h|r",
+        Item::QualityColor::Prefix(static_cast<int>(quality)),
+        itemID, property, name);
+    return n > 0 && static_cast<size_t>(n) < outSize;
+}
+
 bool BasicFromItemID(uint32_t itemID, char *out, size_t outSize) {
     return BasicFromIDSuffix(itemID, 0, out, outSize);
 }

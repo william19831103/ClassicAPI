@@ -197,9 +197,40 @@ static int __fastcall Script_GameTooltipGetItem(void *L) {
     // CGItem-path GUID when no unit/GO/spell is shown) — see
     // Item::TooltipItem::CurrentID for the stale-GUID guarding.
     uint64_t itemGuid = 0;
-    const int itemID = Item::TooltipItem::CurrentID(base, &itemGuid);
+    uint32_t visibleItemID = 0;
+    uint32_t visibleProperty = 0;
+    const bool hasVisibleItem = Item::TooltipItem::CurrentVisibleItem(
+        base, &visibleItemID, &visibleProperty);
+    int itemID = Item::TooltipItem::CurrentID(base, &itemGuid);
+    if (itemID <= 0 && hasVisibleItem)
+        itemID = static_cast<int>(visibleItemID);
     if (itemID <= 0)
         return 0;
+
+    // SetInventoryItem on another player has no live CGItem for the native
+    // link builder. Use the complete uint32 value captured from
+    // visibleEntry + 0x28 instead of the legacy tooltip compare field,
+    // whose read is limited to the low 16 bits.
+    if (hasVisibleItem && visibleItemID == static_cast<uint32_t>(itemID)) {
+        char link[256];
+        if (Item::Link::BasicFromIDProperty(visibleItemID, visibleProperty,
+                                            link, sizeof(link))) {
+            const uint8_t *record = Item::PeekRecord(visibleItemID);
+            if (record == nullptr) {
+                Item::Data::WarmCache(visibleItemID);
+                return 0;
+            }
+            const char *name = Game::Read<const char *>(
+                record, Offsets::OFF_ITEMSTATS_NAME);
+            if (name == nullptr || *name == '\0')
+                return 0;
+            Game::Lua::PushString(L, name);
+            Game::Lua::PushString(L, link);
+            Game::Lua::PushNumber(L, static_cast<double>(visibleItemID));
+            return 3;
+        }
+    }
+
     const uint32_t guidLo = static_cast<uint32_t>(itemGuid);
     const uint32_t guidHi = static_cast<uint32_t>(itemGuid >> 32);
 

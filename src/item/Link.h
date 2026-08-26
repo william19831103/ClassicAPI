@@ -65,4 +65,12 @@ bool NameFromIDSuffix(uint32_t itemID, int suffixID, char *out, size_t outSize);
 // name. `suffixID` 0 reduces exactly to BasicFromItemID.
 bool BasicFromIDSuffix(uint32_t itemID, int suffixID, char *out, size_t outSize);
 
+// Same basic link construction, but preserves the visible item's raw
+// Random Property value as an unsigned 32-bit field. This is separate from
+// BasicFromIDSuffix because the visible-item path may carry a custom value
+// such as an item GUIDLow, which can be outside the signed int range and may
+// not have a matching ItemRandomProperties row for name decoration.
+bool BasicFromIDProperty(uint32_t itemID, uint32_t property, char *out,
+                        size_t outSize);
+
 } // namespace Item::Link
