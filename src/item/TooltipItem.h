@@ -45,8 +45,9 @@ int CurrentID(const void *tooltipObj, uint64_t *outGuid);
 bool CurrentVisibleItem(const void *tooltipObj, uint32_t *outItemID,
                         uint32_t *outProperty);
 
-// Clears the per-tooltip visible-item side state. Called by the common
-// tooltip clear hook and by SetInventoryItem before publishing a new value.
+// Clears the published visible-item side state. During a native item build,
+// the pending state is deliberately retained until the builder's callback has
+// finished reading it.
 void ClearVisibleItem(const void *tooltipObj);
 
 } // namespace Item::TooltipItem

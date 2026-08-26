@@ -42,6 +42,13 @@ VisibleItemState g_visibleItem;
 // erase it before the callback reads GameTooltip:GetItem().
 VisibleItemState g_pendingVisibleItem;
 
+void PrepareForReload() {
+    g_visibleItem = {};
+    g_pendingVisibleItem = {};
+}
+
+const Game::ReloadAutoRegister _reloadReg{&PrepareForReload};
+
 using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using GetVisibleItem_t = void *(__thiscall *)(void *unit, int slot0);
 using SetInventoryItem_t = int(__fastcall *)(void *L);
