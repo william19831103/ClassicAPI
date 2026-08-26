@@ -34,6 +34,7 @@
 
 #include "Game.h"
 #include "Offsets.h"
+#include "item/TooltipItem.h"
 
 #include <cstdint>
 
@@ -49,6 +50,7 @@ void __fastcall Clear_h(void *self) {
     if (self != nullptr)
         *reinterpret_cast<uint64_t *>(static_cast<uint8_t *>(self) +
                                       Offsets::OFF_TOOLTIP_ITEM_GUID_LO) = 0;
+    Item::TooltipItem::ClearVisibleItem(self);
 }
 
 static const Game::HookAutoRegister _hook{
