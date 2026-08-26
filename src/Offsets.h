@@ -1293,7 +1293,6 @@ enum Offsets {
     // TWO_SHORT descriptor is what used to make the ordinary link path read
     // only the low 16 bits.
     OFF_VISIBLE_ITEM_PROPERTIES = 0x28,
-    OFF_VISIBLE_ITEM_PAD = 0x2C,
 
     // CGUnit m_objectFields pointer offset. Different from CGItem's
     // descriptor at +0x114 — these are sibling classes under CGObject
