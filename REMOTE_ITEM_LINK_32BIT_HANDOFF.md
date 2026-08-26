@@ -68,6 +68,18 @@ E:\魔兽逆向资料\112\wowhookStudy\ClassicAPI
 37a924d69881fd0a2af7f70fa26475b8bb8bedd0
 ```
 
+清理提交：
+
+```text
+41feac8 清理垃圾
+```
+
+交接文档提交：
+
+```text
+cb38f74 开发交接文档
+```
+
 ## 4. 当前客户端修复逻辑
 
 ### 4.1 关键偏移
@@ -174,7 +186,9 @@ OFF_VISIBLE_ITEM_PAD = 0x2C;
 
 ## 6. 当前工作区状态
 
-清理后的未提交修改：
+代码清理已经提交到 `41feac8`。当前工作区包含交接文档提交 `cb38f74`，状态正常。
+
+清理提交涉及：
 
 ```text
 M  src/Offsets.h
@@ -183,7 +197,7 @@ M  src/item/TooltipItem.h
 D  src/item/VisibleItemDebug.cpp
 ```
 
-当前尚未创建新的 Git 提交。
+以上修改已经包含在 `41feac8` 中，当前没有待提交的源码清理修改。
 
 ## 7. 验证结果
 
@@ -217,14 +231,7 @@ build\Release\ClassicAPI.dll
 
 用户已经确认远程装备的 Item Link 可以正常获得完整 32 位属性。
 
-## 8. 后续提交建议
-
-确认无误后，可提交本次清理：
-
-```bash
-git add src/Offsets.h src/item/TooltipItem.cpp src/item/TooltipItem.h src/item/VisibleItemDebug.cpp
-git commit -m "清理远程装备32位属性修复代码"
-```
+## 8. 后续排查建议
 
 如果后续出现回归，优先检查：
 
@@ -237,4 +244,3 @@ git commit -m "清理远程装备32位属性修复代码"
 ## 9. 已知注意事项
 
 当前实现使用全局的 `g_visibleItem` 和 `g_pendingVisibleItem` 状态，主要服务于当前 Tooltip 构建流程。暂未扩展为多个 Tooltip 并发场景的状态表，因为这不属于本次 32 位属性修复的必要范围。
-
