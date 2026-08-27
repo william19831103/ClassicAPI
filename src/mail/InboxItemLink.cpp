@@ -33,39 +33,10 @@
 #include "item/Link.h"
 
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
-#include <windows.h>
 
 namespace Mail::InboxItemLink {
 
 namespace {
-
-void LogInboxItemFields(int messageIndex, const uint8_t *entry,
-                        uint32_t itemID, uint32_t enchantID,
-                        uint32_t randomProperty, uint32_t uniqueID) {
-    char path[MAX_PATH] = {};
-    const DWORD length = GetModuleFileNameA(nullptr, path, sizeof(path));
-    if (length == 0 || length >= sizeof(path))
-        return;
-    char *slash = std::strrchr(path, '\\');
-    if (slash == nullptr)
-        return;
-    strcpy_s(slash + 1, sizeof(path) - static_cast<size_t>(slash + 1 - path),
-             "ClassicAPI_InboxItemLink.log");
-
-    FILE *file = nullptr;
-    if (fopen_s(&file, path, "a") != 0 || file == nullptr)
-        return;
-    const uint32_t raw134 = *reinterpret_cast<const uint32_t *>(entry + 0x134);
-    const uint32_t raw138 = *reinterpret_cast<const uint32_t *>(entry + 0x138);
-    std::fprintf(file,
-                 "mail=%d entry=%p item=%u enchant124=%u random128=%u "
-                 "unique12C=%u raw134=%u raw138=%u\n",
-                 messageIndex, entry, itemID, randomProperty, enchantID,
-                 uniqueID, raw134, raw138);
-    std::fclose(file);
-}
 
 int __fastcall Script_GetInboxItemLink(void *L) {
     if (!Game::Lua::IsNumber(L, 1)) {
@@ -109,8 +80,6 @@ int __fastcall Script_GetInboxItemLink(void *L) {
         entry + Offsets::OFF_INBOX_ENTRY_RANDOM_PROPERTY);
     const uint32_t uniqueID = *reinterpret_cast<const uint32_t *>(
         entry + Offsets::OFF_INBOX_ENTRY_UNIQUE_ID);
-    LogInboxItemFields(oneBasedMsg, entry, itemID, enchantID, property,
-                       uniqueID);
 
     char buf[256];
     if (!Item::Link::BasicFromIDEnchantPropertyUnique(
