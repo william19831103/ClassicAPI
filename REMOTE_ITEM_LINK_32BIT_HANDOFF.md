@@ -244,3 +244,131 @@ build\Release\ClassicAPI.dll
 ## 9. 已知注意事项
 
 当前实现使用全局的 `g_visibleItem` 和 `g_pendingVisibleItem` 状态，主要服务于当前 Tooltip 构建流程。暂未扩展为多个 Tooltip 并发场景的状态表，因为这不属于本次 32 位属性修复的必要范围。
+
+## 10. 2026-08-27 最终实现（以本节为准）
+
+> 本节覆盖前文中“不要使用 `entry + 0x2C`”以及邮箱字段偏移的旧结论。前文保留为排错历史。
+
+### 10.1 总体方案
+
+不要把 `PLAYER_VISIBLE_ITEM_*_PROPERTIES` 的第一个 DWORD 强行改为
+32 位 GUIDLow。客户端会将该字段按两个 16 位值解释，修改该字段会导致
+部分武器模型不显示。
+
+保持第一个 DWORD 的原有 Random Property 用途，将 GUIDLow 放入第二个
+Properties DWORD（suffix factor）并写入 Item Link 的第四字段：
+
+```text
+|Hitem:<itemID>:<enchantID>:<randomProperty>:<uniqueID>|h[Name]|h|r
+```
+
+其中 `uniqueID` 是本服的物品 `GUIDLow`。
+
+### 10.2 服务端约定
+
+服务端工程：`E:\MaNGOS_Turtle\patch_1171`
+
+```cpp
+uint32 GetItemSuffixFactor() const { return GetGUIDLow(); }
+```
+
+物品创建后还应将 `ITEM_FIELD_PROPERTY_SEED` 初始化为同一个 GUIDLow，确保
+物品在邮件、拍卖行和可见装备等包路径中都携带一致的 suffix factor。
+
+玩家可见装备保持原有两条写入：
+
+```cpp
+SetInt16Value(PLAYER_VISIBLE_ITEM_1_PROPERTIES + slot * MAX_VISIBLE_ITEM_OFFSET,
+              0, pItem->GetItemRandomPropertyId());
+SetUInt32Value(PLAYER_VISIBLE_ITEM_1_PROPERTIES + 1 + slot * MAX_VISIBLE_ITEM_OFFSET,
+               pItem->GetItemSuffixFactor());
+```
+
+不要把第一条 `SetInt16Value` 改成 32 位写入。
+
+### 10.3 ClassicAPI 字段映射
+
+客户端工程：`E:\魔兽逆向资料\112\wowhookStudy\ClassicAPI`
+
+远程可见装备：
+
+```text
+entry + 0x28  randomProperty
+entry + 0x2C  uniqueID / GUIDLow
+```
+
+拍卖行条目：
+
+```text
+entry + 0x08  itemID
+entry + 0x0C  enchantID
+entry + 0x10  randomProperty
+entry + 0x14  uniqueID / GUIDLow
+```
+
+邮件条目必须按服务端 `SMSG_MAIL_LIST_RESULT` 的字段顺序读取：
+
+```text
+entry + 0x120 itemID
+entry + 0x124 enchantID
+entry + 0x128 randomProperty
+entry + 0x12C suffixFactor = uniqueID / GUIDLow
+```
+
+`+0x134` 及之后是 count、charges、durability 等邮件显示数据，不能作为
+uniqueID。曾经把 `+0x134` 当作 uniqueID、把 `+0x138` 当作
+randomProperty，均为错误映射。
+
+### 10.4 客户端实现入口
+
+`Item::Link::BasicFromIDPropertyUnique()` 和
+`BasicFromIDEnchantPropertyUnique()` 负责生成四字段链接。
+
+以下入口都应使用相同的字段约定：
+
+1. `GetInventoryItemLink("target", slot)`：远程装备读取 `+0x28/+0x2C`。
+2. `GameTooltip:SetInventoryItem`：在原生 Tooltip 回调期间通过 pending
+   状态保留远程装备的完整字段。
+3. `GetAuctionItemLink(type, index)` 以及 `GameTooltip:SetAuctionItem`：
+   读取拍卖行条目的四个字段。
+4. `GetInboxItemLink(messageIndex[, attachmentIndex])` 以及
+   `GameTooltip:SetInboxItem`：读取邮件条目的 `+0x120/+0x124/+0x128/+0x12C`。
+
+原生 Tooltip 在 `Set*Item` 尚未返回时就会触发 `OnTooltipSetItem`；因此
+`g_pendingVisibleItem` 在原生构建期间必须保留，不能由 Tooltip 的 Clear
+路径提前清掉。
+
+### 10.5 TurtleEnchant 插件约定
+
+插件文件：
+
+```text
+E:\twmoa_1181\Interface\AddOns\TurtleEnchant\TurtleEnchant.lua
+```
+
+解析四字段链接：
+
+```lua
+|Hitem:(%d+):(%d+):(%d+):(%d+)
+```
+
+第四字段优先作为 GUIDLow；为兼容旧链接，第四字段为 `0` 时才回退到第三字段。
+插件不需要包装 `GameTooltip:SetInboxItem` 或缓存 `teInboxMailID`；该尝试已
+撤回，正式入口由 ClassicAPI 的 itemlink 生成逻辑处理。
+
+### 10.6 已排除的错误路径
+
+1. 不使用 DbgView / `OutputDebugString` 诊断。
+2. 不在正式版本中保留 `ClassicAPI_InboxItemLink.log` 文件写入。
+3. 不修改或禁用 `D:\登录器\ares-login\DllReadFile` 的既有邮箱 Hook；它
+   影响旧客户端的 randomProperty 显示，不是 ClassicAPI 的正式修复入口。
+4. 不把 `GameTooltip:SetInboxItem` 注册为早期 Lua 表覆盖；初始化阶段可能
+   创建或覆盖 `GameTooltip` 全局并造成客户端启动报错。
+
+### 10.7 验证清单
+
+1. 远程观察装备、拍卖行物品、邮箱附件的链接均包含四个数值字段。
+2. 第三字段仍为正确的 randomProperty。
+3. 第四字段等于对应物品的 GUIDLow。
+4. 完全退出客户端后重新注入最新 `build\Release\ClassicAPI.dll`。
+5. `TurtleEnchant` 的 `ParseItemLink` 能优先取得第四字段的 GUIDLow。
