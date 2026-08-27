@@ -65,12 +65,15 @@ bool NameFromIDSuffix(uint32_t itemID, int suffixID, char *out, size_t outSize);
 // name. `suffixID` 0 reduces exactly to BasicFromItemID.
 bool BasicFromIDSuffix(uint32_t itemID, int suffixID, char *out, size_t outSize);
 
-// Same basic link construction, but preserves the visible item's raw
-// Random Property value as an unsigned 32-bit field. This is separate from
-// BasicFromIDSuffix because the visible-item path may carry a custom value
-// such as an item GUIDLow, which can be outside the signed int range and may
-// not have a matching ItemRandomProperties row for name decoration.
-bool BasicFromIDProperty(uint32_t itemID, uint32_t property, char *out,
-                        size_t outSize);
+// Builds a visible-item link with its random-property and unique fields.
+// This realm mirrors the item's GUIDLow through the visible suffix-factor
+// DWORD, which becomes the fourth `item:` field for addon consumption.
+bool BasicFromIDPropertyUnique(uint32_t itemID, uint32_t property,
+                               uint32_t uniqueID, char *out, size_t outSize);
+
+// As above, preserving a permanent enchant ID in the second `item:` field.
+bool BasicFromIDEnchantPropertyUnique(uint32_t itemID, uint32_t enchantID,
+                                      uint32_t property, uint32_t uniqueID,
+                                      char *out, size_t outSize);
 
 } // namespace Item::Link

@@ -38,12 +38,10 @@ namespace Item::TooltipItem {
 // than return a suffix-stripped link.
 int CurrentID(const void *tooltipObj, uint64_t *outGuid);
 
-// Returns the raw 32-bit Random Property captured from the most recent
-// remote-player SetInventoryItem call for this tooltip. `outItemID` receives
-// the matching visible item ID. The item ID check prevents a cached value
-// from being applied to a different tooltip item.
+// Returns the visible random-property and unique-ID fields captured from the
+// most recent remote-player SetInventoryItem call for this tooltip.
 bool CurrentVisibleItem(const void *tooltipObj, uint32_t *outItemID,
-                        uint32_t *outProperty);
+                        uint32_t *outProperty, uint32_t *outUniqueID);
 
 // Clears the published visible-item side state. During a native item build,
 // the pending state is deliberately retained until the builder's callback has
