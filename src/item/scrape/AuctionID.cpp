@@ -13,6 +13,7 @@
 
 #include "Game.h"
 #include "Offsets.h"
+#include "item/Link.h"
 
 #include <cstdint>
 
@@ -94,8 +95,51 @@ static int __fastcall Script_GetAuctionItemID(void *L) {
     return 1;
 }
 
+// `GetAuctionItemLink(type, index)` with the realm's GUIDLow carried in the
+// auction result's suffix-factor field. The native client link builder drops
+// that field, so rebuild the link with it as the fourth item-link field.
+static int __fastcall Script_GetAuctionItemLink(void *L) {
+    if (!Game::Lua::IsString(L, 1) || !Game::Lua::IsNumber(L, 2)) {
+        Game::Lua::Error(L, "Usage: GetAuctionItemLink(\"list\"|\"owner\"|\"bidder\", index)");
+        return 0;
+    }
+    const ListSlot *list = FindList(Game::Lua::ToString(L, 1));
+    if (list == nullptr)
+        return 0;
+    const int index = static_cast<int>(Game::Lua::ToNumber(L, 2)) - 1;
+    if (index < 0)
+        return 0;
+
+    const int count = static_cast<int>(*reinterpret_cast<const uint32_t *>(list->count));
+    if (index >= count)
+        return 0;
+    auto *entries = reinterpret_cast<const uint8_t *const *>(list->entries);
+    const uint8_t *entry = entries[index];
+    if (entry == nullptr)
+        return 0;
+
+    const uint32_t itemID = *reinterpret_cast<const uint32_t *>(
+        entry + Offsets::OFF_AUCTION_ENTRY_ITEM_ID);
+    if (itemID == 0)
+        return 0;
+    const uint32_t enchantID = *reinterpret_cast<const uint32_t *>(
+        entry + Offsets::OFF_AUCTION_ENTRY_ENCHANT_ID);
+    const uint32_t property = *reinterpret_cast<const uint32_t *>(
+        entry + Offsets::OFF_AUCTION_ENTRY_RANDOM_PROPERTY);
+    const uint32_t uniqueID = *reinterpret_cast<const uint32_t *>(
+        entry + Offsets::OFF_AUCTION_ENTRY_UNIQUE_ID);
+
+    char link[256];
+    if (!Item::Link::BasicFromIDEnchantPropertyUnique(
+            itemID, enchantID, property, uniqueID, link, sizeof(link)))
+        return 0;
+    Game::Lua::PushString(L, link);
+    return 1;
+}
+
 static void RegisterLuaFunctions() {
     Game::Lua::RegisterGlobalFunction("GetAuctionItemID", &Script_GetAuctionItemID);
+    Game::Lua::RegisterGlobalFunction("GetAuctionItemLink", &Script_GetAuctionItemLink);
 }
 
 static const Game::ModuleAutoRegister _autoreg{&RegisterLuaFunctions};

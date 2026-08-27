@@ -89,18 +89,24 @@ bool BasicFromIDSuffix(uint32_t itemID, int suffixID, char *out, size_t outSize)
     return n > 0 && static_cast<size_t>(n) < outSize;
 }
 
-bool BasicFromIDProperty(uint32_t itemID, uint32_t property, char *out,
-                         size_t outSize) {
+bool BasicFromIDPropertyUnique(uint32_t itemID, uint32_t property,
+                               uint32_t uniqueID, char *out, size_t outSize) {
+    return BasicFromIDEnchantPropertyUnique(itemID, 0, property, uniqueID,
+                                            out, outSize);
+}
+
+bool BasicFromIDEnchantPropertyUnique(uint32_t itemID, uint32_t enchantID,
+                                      uint32_t property, uint32_t uniqueID,
+                                      char *out, size_t outSize) {
     if (out == nullptr || outSize == 0)
         return false;
     const uint8_t *record = Item::PeekRecord(itemID);
     if (record == nullptr)
         return false;
 
-    // The visible-item value may be a custom GUIDLow rather than a real
-    // ItemRandomProperties row. Do not pass it to the engine's name helper as
-    // a DBC index; use the cached base name and preserve the raw value only
-    // in the link payload.
+    // The realm's unique ID is a GUIDLow, not a DBC suffix row. Use the base
+    // name instead of asking the engine to interpret either custom field as
+    // a random-suffix ID.
     const char *base = *reinterpret_cast<const char *const *>(
         record + Offsets::OFF_ITEMSTATS_NAME);
     if (base == nullptr || *base == '\0')
@@ -111,9 +117,9 @@ bool BasicFromIDProperty(uint32_t itemID, uint32_t property, char *out,
     const uint32_t quality = *reinterpret_cast<const uint32_t *>(
         record + Offsets::OFF_ITEMSTATS_QUALITY);
     const int n = std::snprintf(out, outSize,
-        "%s|Hitem:%u:0:%u:0:0:0:0:0|h[%s]|h|r",
+        "%s|Hitem:%u:%u:%u:%u|h[%s]|h|r",
         Item::QualityColor::Prefix(static_cast<int>(quality)),
-        itemID, property, name);
+        itemID, enchantID, property, uniqueID, name);
     return n > 0 && static_cast<size_t>(n) < outSize;
 }
 

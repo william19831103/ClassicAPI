@@ -13,8 +13,7 @@
 
 // `GetInboxItemLink(messageIndex[, attachmentIndex])` — returns
 // `(link, itemID)` for the item attached to inbox message
-// `messageIndex` (1-based). `link` is a basic itemID-only hyperlink
-// (see note below). Vanilla supports one attachment per message; the
+// `messageIndex` (1-based). Vanilla supports one attachment per message; the
 // optional 1-based `attachmentIndex` exists for modern-signature
 // parity and is no-op for any value other than 1.
 //
@@ -22,15 +21,9 @@
 // modern's link-only signature — saves callers a `string.match` to
 // parse it back out of the link.
 //
-// **Basic link only** (`|cff...|Hitem:N:0:0:0|h[Name]|h|r`). Vanilla
-// inbox entries DO store per-instance modifiers inline at `+0x12C..`
-// (enchant, suffix factor, random property — same fields
-// `Script_GameTooltip_SetInboxItem` copies onto the tooltip), but
-// 3.3.5's `GetInboxItemLink` ignores them and returns the itemID-only
-// link too (`FUN_0061E290(itemID)`). We match modern behavior — per-
-// instance data only fully manifests when the player takes the item
-// and the engine spawns a real CGItem; until then the link is
-// definitionally itemID-bound.
+// Inbox records retain enchant, random-property, and suffix-factor fields.
+// This realm uses the suffix factor as the attachment item's GUIDLow, so the
+// link preserves it in the fourth `item:` field for addon consumption.
 //
 // Returns nothing on out-of-range messageIndex, empty message slot,
 // no attachment on the message, or attachmentIndex ≠ 1.
@@ -40,10 +33,39 @@
 #include "item/Link.h"
 
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <windows.h>
 
 namespace Mail::InboxItemLink {
 
 namespace {
+
+void LogInboxItemFields(int messageIndex, const uint8_t *entry,
+                        uint32_t itemID, uint32_t enchantID,
+                        uint32_t randomProperty, uint32_t uniqueID) {
+    char path[MAX_PATH] = {};
+    const DWORD length = GetModuleFileNameA(nullptr, path, sizeof(path));
+    if (length == 0 || length >= sizeof(path))
+        return;
+    char *slash = std::strrchr(path, '\\');
+    if (slash == nullptr)
+        return;
+    strcpy_s(slash + 1, sizeof(path) - static_cast<size_t>(slash + 1 - path),
+             "ClassicAPI_InboxItemLink.log");
+
+    FILE *file = nullptr;
+    if (fopen_s(&file, path, "a") != 0 || file == nullptr)
+        return;
+    const uint32_t raw134 = *reinterpret_cast<const uint32_t *>(entry + 0x134);
+    const uint32_t raw138 = *reinterpret_cast<const uint32_t *>(entry + 0x138);
+    std::fprintf(file,
+                 "mail=%d entry=%p item=%u enchant124=%u random128=%u "
+                 "unique12C=%u raw134=%u raw138=%u\n",
+                 messageIndex, entry, itemID, randomProperty, enchantID,
+                 uniqueID, raw134, raw138);
+    std::fclose(file);
+}
 
 int __fastcall Script_GetInboxItemLink(void *L) {
     if (!Game::Lua::IsNumber(L, 1)) {
@@ -81,8 +103,18 @@ int __fastcall Script_GetInboxItemLink(void *L) {
     if (itemID == 0)
         return 0;
 
+    const uint32_t enchantID = *reinterpret_cast<const uint32_t *>(
+        entry + Offsets::OFF_INBOX_ENTRY_ENCHANT_ID);
+    const uint32_t property = *reinterpret_cast<const uint32_t *>(
+        entry + Offsets::OFF_INBOX_ENTRY_RANDOM_PROPERTY);
+    const uint32_t uniqueID = *reinterpret_cast<const uint32_t *>(
+        entry + Offsets::OFF_INBOX_ENTRY_UNIQUE_ID);
+    LogInboxItemFields(oneBasedMsg, entry, itemID, enchantID, property,
+                       uniqueID);
+
     char buf[256];
-    if (!Item::Link::BasicFromItemID(itemID, buf, sizeof buf))
+    if (!Item::Link::BasicFromIDEnchantPropertyUnique(
+            itemID, enchantID, property, uniqueID, buf, sizeof buf))
         return 0;
     Game::Lua::PushString(L, buf);
     Game::Lua::PushNumber(L, static_cast<double>(itemID));

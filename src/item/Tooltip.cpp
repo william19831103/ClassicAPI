@@ -199,8 +199,9 @@ static int __fastcall Script_GameTooltipGetItem(void *L) {
     uint64_t itemGuid = 0;
     uint32_t visibleItemID = 0;
     uint32_t visibleProperty = 0;
+    uint32_t visibleUniqueID = 0;
     const bool hasVisibleItem = Item::TooltipItem::CurrentVisibleItem(
-        base, &visibleItemID, &visibleProperty);
+        base, &visibleItemID, &visibleProperty, &visibleUniqueID);
     int itemID = Item::TooltipItem::CurrentID(base, &itemGuid);
     if (itemID <= 0 && hasVisibleItem)
         itemID = static_cast<int>(visibleItemID);
@@ -208,13 +209,13 @@ static int __fastcall Script_GameTooltipGetItem(void *L) {
         return 0;
 
     // SetInventoryItem on another player has no live CGItem for the native
-    // link builder. Use the complete uint32 value captured from
-    // visibleEntry + 0x28 instead of the legacy tooltip compare field,
-    // whose read is limited to the low 16 bits.
+    // link builder. The first visible Properties DWORD remains the legacy
+    // random-property field; the second carries this realm's GUIDLow.
     if (hasVisibleItem && visibleItemID == static_cast<uint32_t>(itemID)) {
         char link[256];
-        if (Item::Link::BasicFromIDProperty(visibleItemID, visibleProperty,
-                                            link, sizeof(link))) {
+        if (Item::Link::BasicFromIDPropertyUnique(
+                visibleItemID, visibleProperty, visibleUniqueID, link,
+                sizeof(link))) {
             const uint8_t *record = Item::PeekRecord(visibleItemID);
             if (record == nullptr) {
                 Item::Data::WarmCache(visibleItemID);

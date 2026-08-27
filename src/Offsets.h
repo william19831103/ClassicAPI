@@ -118,6 +118,8 @@ enum Offsets {
     // (Slot numbers are the method-registry index per `docs/raw_methods.txt`.)
     FUN_SCRIPT_GAMETOOLTIP_SET_HYPERLINK = 0x00531FD0, // slot 12
     FUN_SCRIPT_GAMETOOLTIP_SET_INVENTORY_ITEM = 0x00532EE0, // slot 19
+    FUN_SCRIPT_GAMETOOLTIP_SET_INBOX_ITEM = 0x005354C0, // slot 36
+    FUN_SCRIPT_GAMETOOLTIP_SET_AUCTION_ITEM = 0x00535810, // slot 38
     // `GetInventoryItemLink(unit, slot)` Lua C function. For remote player
     // units it reads the visible-items entry and historically truncates the
     // Random Property value to 16 bits.
@@ -1288,11 +1290,12 @@ enum Offsets {
     // first; we do the same in `Item::InventoryID`.
     FUN_UNIT_GET_VISIBLE_ITEM = 0x005F0D60,
     OFF_VISIBLE_ITEM_ITEM_ID = 0x08,
-    // Full uint32 Random Property value in a visible-item entry. The
-    // server writes PLAYER_VISIBLE_ITEM_*_PROPERTIES here; the client-side
-    // TWO_SHORT descriptor is what used to make the ordinary link path read
-    // only the low 16 bits.
+    // First visible-item Properties DWORD. The client treats it as two
+    // 16-bit values, so it remains the legacy random-property field.
     OFF_VISIBLE_ITEM_PROPERTIES = 0x28,
+    // Second visible-item Properties DWORD. The server mirrors the item's
+    // PROPERTY_SEED here; this realm uses it as the full item GUIDLow.
+    OFF_VISIBLE_ITEM_SUFFIX_FACTOR = 0x2C,
 
     // CGUnit m_objectFields pointer offset. Different from CGItem's
     // descriptor at +0x114 — these are sibling classes under CGObject
@@ -6377,8 +6380,8 @@ enum Offsets {
     TRADE_MAX_SLOTS = 7,
 
     // Auction house — three independent arrays of entry-pointers
-    // covering the three views (list / owner / bidder). Each entry
-    // carries the itemID at `+0x08`.
+    // covering the three views (list / owner / bidder). The entry mirrors
+    // the auction-result item fields starting at +0x08.
     VAR_AUCTION_LIST_ENTRIES = 0x00B72278,
     VAR_AUCTION_LIST_COUNT = 0x00B7261C,
     VAR_AUCTION_OWNER_ENTRIES = 0x00B72340,
@@ -6386,6 +6389,9 @@ enum Offsets {
     VAR_AUCTION_BIDDER_ENTRIES = 0x00B72470,
     VAR_AUCTION_BIDDER_COUNT = 0x00B7262C,
     OFF_AUCTION_ENTRY_ITEM_ID = 0x08,
+    OFF_AUCTION_ENTRY_ENCHANT_ID = 0x0C,
+    OFF_AUCTION_ENTRY_RANDOM_PROPERTY = 0x10,
+    OFF_AUCTION_ENTRY_UNIQUE_ID = 0x14,
 
     // Auction sell slot — holds a single CGItem GUID for the item
     // currently sitting in the "sell" frame. Engine resolves it via
@@ -6427,18 +6433,18 @@ enum Offsets {
     // entry completion callback at `0x004AF0A0` to GetRecord; for
     // ID-only retrieval we skip the callback.)
     //
-    // Entries also carry per-instance modifiers at `+0x12C`
-    // (enchantID), `+0x134` (suffix factor), `+0x138` (random
-    // property ID), etc. — `Script_GameTooltip_SetInboxItem` at
-    // `0x005354C0` copies them onto the tooltip object to render a
-    // fully-decorated tooltip. We don't expose them in
-    // `GetInboxItemLink` because 3.3.5's same function only emits
-    // basic itemID-only links (`FUN_0061E290(itemID)`); per-instance
-    // data only fully manifests when the player takes the item and
-    // the engine spawns a real CGItem.
+    // `Script_GameTooltip_SetInboxItem` at `0x005354C0` copies the
+    // following per-instance fields onto its tooltip object.
     VAR_INBOX_ENTRIES = 0x00B6EF54,
     VAR_INBOX_COUNT = 0x00B6EFC0,
     OFF_INBOX_ENTRY_ITEM_ID = 0x120,
+    // SetInboxItem copies this field to tooltip+0x424, the native
+    // item-link random-property/suffix slot.
+    OFF_INBOX_ENTRY_RANDOM_PROPERTY = 0x128,
+    OFF_INBOX_ENTRY_ENCHANT_ID = 0x124,
+    // Mail packets serialize { enchant, randomProperty, suffixFactor }.
+    // This realm stores the item GUIDLow in suffixFactor.
+    OFF_INBOX_ENTRY_UNIQUE_ID = 0x12C,
 
     // SendMail attached item — the engine stores the attached item's
     // 64-bit GUID at these globals when the player drops an item onto

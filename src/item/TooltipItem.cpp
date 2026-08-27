@@ -32,6 +32,7 @@ struct VisibleItemState {
     const void *tooltip = nullptr;
     uint32_t itemID = 0;
     uint32_t property = 0;
+    uint32_t uniqueID = 0;
     bool valid = false;
 };
 
@@ -52,10 +53,14 @@ const Game::ReloadAutoRegister _reloadReg{&PrepareForReload};
 using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using GetVisibleItem_t = void *(__thiscall *)(void *unit, int slot0);
 using SetInventoryItem_t = int(__fastcall *)(void *L);
+using SetInboxItem_t = int(__fastcall *)(void *L);
+using SetAuctionItem_t = int(__fastcall *)(void *L);
 using SetHyperlink_t = int(__fastcall *)(void *L);
 using GetInventoryItemLink_t = int(__fastcall *)(void *L);
 
 SetInventoryItem_t g_setInventoryItemOriginal = nullptr;
+SetInboxItem_t g_setInboxItemOriginal = nullptr;
+SetAuctionItem_t g_setAuctionItemOriginal = nullptr;
 SetHyperlink_t g_setHyperlinkOriginal = nullptr;
 GetInventoryItemLink_t g_getInventoryItemLinkOriginal = nullptr;
 
@@ -80,11 +85,14 @@ void *ResolveUnit(const char *token) {
 }
 
 bool ReadRemoteVisibleItem(const char *unitToken, int slot,
-                           uint32_t *outItemID, uint32_t *outProperty) {
+                           uint32_t *outItemID, uint32_t *outProperty,
+                           uint32_t *outUniqueID) {
     if (outItemID != nullptr)
         *outItemID = 0;
     if (outProperty != nullptr)
         *outProperty = 0;
+    if (outUniqueID != nullptr)
+        *outUniqueID = 0;
     if (unitToken == nullptr || slot < 1 || slot > 19)
         return false;
 
@@ -115,6 +123,94 @@ bool ReadRemoteVisibleItem(const char *unitToken, int slot,
     if (outProperty != nullptr)
         *outProperty = Game::Read<uint32_t>(
             entry, Offsets::OFF_VISIBLE_ITEM_PROPERTIES);
+    if (outUniqueID != nullptr)
+        *outUniqueID = Game::Read<uint32_t>(
+            entry, Offsets::OFF_VISIBLE_ITEM_SUFFIX_FACTOR);
+    return true;
+}
+
+bool ReadInboxItem(int messageIndex, uint32_t *outItemID,
+                   uint32_t *outProperty, uint32_t *outUniqueID) {
+    if (outItemID != nullptr)
+        *outItemID = 0;
+    if (outProperty != nullptr)
+        *outProperty = 0;
+    if (outUniqueID != nullptr)
+        *outUniqueID = 0;
+    if (messageIndex < 1)
+        return false;
+
+    const int count = Game::Read<int>(Offsets::VAR_INBOX_COUNT);
+    const int index = messageIndex - 1;
+    if (index >= count)
+        return false;
+    auto **entries = *reinterpret_cast<const uint8_t ***>(
+        Offsets::VAR_INBOX_ENTRIES);
+    if (entries == nullptr || entries[index] == nullptr)
+        return false;
+    const uint8_t *entry = entries[index];
+    const uint32_t itemID = Game::Read<uint32_t>(
+        entry, Offsets::OFF_INBOX_ENTRY_ITEM_ID);
+    if (itemID == 0)
+        return false;
+
+    if (outItemID != nullptr)
+        *outItemID = itemID;
+    if (outProperty != nullptr)
+        *outProperty = Game::Read<uint32_t>(
+            entry, Offsets::OFF_INBOX_ENTRY_RANDOM_PROPERTY);
+    if (outUniqueID != nullptr)
+        *outUniqueID = Game::Read<uint32_t>(
+            entry, Offsets::OFF_INBOX_ENTRY_UNIQUE_ID);
+    return true;
+}
+
+bool ReadAuctionItem(const char *type, int auctionIndex, uint32_t *outItemID,
+                     uint32_t *outProperty, uint32_t *outUniqueID) {
+    if (outItemID != nullptr)
+        *outItemID = 0;
+    if (outProperty != nullptr)
+        *outProperty = 0;
+    if (outUniqueID != nullptr)
+        *outUniqueID = 0;
+    if (type == nullptr || auctionIndex < 1)
+        return false;
+
+    uintptr_t entriesAddress = 0;
+    uintptr_t countAddress = 0;
+    if (std::strcmp(type, "list") == 0) {
+        entriesAddress = Offsets::VAR_AUCTION_LIST_ENTRIES;
+        countAddress = Offsets::VAR_AUCTION_LIST_COUNT;
+    } else if (std::strcmp(type, "owner") == 0) {
+        entriesAddress = Offsets::VAR_AUCTION_OWNER_ENTRIES;
+        countAddress = Offsets::VAR_AUCTION_OWNER_COUNT;
+    } else if (std::strcmp(type, "bidder") == 0) {
+        entriesAddress = Offsets::VAR_AUCTION_BIDDER_ENTRIES;
+        countAddress = Offsets::VAR_AUCTION_BIDDER_COUNT;
+    } else {
+        return false;
+    }
+
+    const int index = auctionIndex - 1;
+    if (index >= Game::Read<int>(countAddress))
+        return false;
+    auto *entries = reinterpret_cast<const uint8_t *const *>(entriesAddress);
+    const uint8_t *entry = entries[index];
+    if (entry == nullptr)
+        return false;
+    const uint32_t itemID = Game::Read<uint32_t>(
+        entry, Offsets::OFF_AUCTION_ENTRY_ITEM_ID);
+    if (itemID == 0)
+        return false;
+
+    if (outItemID != nullptr)
+        *outItemID = itemID;
+    if (outProperty != nullptr)
+        *outProperty = Game::Read<uint32_t>(
+            entry, Offsets::OFF_AUCTION_ENTRY_RANDOM_PROPERTY);
+    if (outUniqueID != nullptr)
+        *outUniqueID = Game::Read<uint32_t>(
+            entry, Offsets::OFF_AUCTION_ENTRY_UNIQUE_ID);
     return true;
 }
 
@@ -128,21 +224,61 @@ void CaptureVisibleItem(const void *tooltipObj, void *L) {
     const int slot = static_cast<int>(Game::Lua::ToNumber(L, 3));
     uint32_t itemID = 0;
     uint32_t property = 0;
-    if (!ReadRemoteVisibleItem(unitToken, slot, &itemID, &property))
+    uint32_t uniqueID = 0;
+    if (!ReadRemoteVisibleItem(unitToken, slot, &itemID, &property, &uniqueID))
         return;
 
     g_visibleItem.tooltip = tooltipObj;
     g_visibleItem.itemID = itemID;
     g_visibleItem.property = property;
+    g_visibleItem.uniqueID = uniqueID;
+    g_visibleItem.valid = true;
+}
+
+void CaptureInboxItem(const void *tooltipObj, void *L) {
+    if (tooltipObj == nullptr || L == nullptr || !Game::Lua::IsNumber(L, 2))
+        return;
+    const int messageIndex = static_cast<int>(Game::Lua::ToNumber(L, 2));
+    uint32_t itemID = 0;
+    uint32_t property = 0;
+    uint32_t uniqueID = 0;
+    if (!ReadInboxItem(messageIndex, &itemID, &property, &uniqueID))
+        return;
+
+    g_visibleItem.tooltip = tooltipObj;
+    g_visibleItem.itemID = itemID;
+    g_visibleItem.property = property;
+    g_visibleItem.uniqueID = uniqueID;
+    g_visibleItem.valid = true;
+}
+
+void CaptureAuctionItem(const void *tooltipObj, void *L) {
+    if (tooltipObj == nullptr || L == nullptr || !Game::Lua::IsString(L, 2) ||
+        !Game::Lua::IsNumber(L, 3))
+        return;
+    const char *type = Game::Lua::ToString(L, 2);
+    const int auctionIndex = static_cast<int>(Game::Lua::ToNumber(L, 3));
+    uint32_t itemID = 0;
+    uint32_t property = 0;
+    uint32_t uniqueID = 0;
+    if (!ReadAuctionItem(type, auctionIndex, &itemID, &property, &uniqueID))
+        return;
+
+    g_visibleItem.tooltip = tooltipObj;
+    g_visibleItem.itemID = itemID;
+    g_visibleItem.property = property;
+    g_visibleItem.uniqueID = uniqueID;
     g_visibleItem.valid = true;
 }
 
 bool ParseItemLinkProperty(const char *link, uint32_t *outItemID,
-                           uint32_t *outProperty) {
+                           uint32_t *outProperty, uint32_t *outUniqueID) {
     if (outItemID != nullptr)
         *outItemID = 0;
     if (outProperty != nullptr)
         *outProperty = 0;
+    if (outUniqueID != nullptr)
+        *outUniqueID = 0;
     if (link == nullptr)
         return false;
 
@@ -169,6 +305,15 @@ bool ParseItemLinkProperty(const char *link, uint32_t *outItemID,
         *outItemID = static_cast<uint32_t>(itemID);
     if (outProperty != nullptr)
         *outProperty = static_cast<uint32_t>(value);
+    if (*end != ':')
+        return itemID != 0;
+
+    const char *unique = end + 1;
+    const unsigned long uniqueValue = std::strtoul(unique, &end, 10);
+    if (end == unique || (*end != ':' && *end != '|' && *end != '\0'))
+        return false;
+    if (outUniqueID != nullptr)
+        *outUniqueID = static_cast<uint32_t>(uniqueValue);
     return itemID != 0;
 }
 
@@ -181,14 +326,15 @@ int __fastcall SetHyperlink_h(void *L) {
             const char *link = Game::Lua::ToString(L, 2);
             uint32_t itemID = 0;
             uint32_t property = 0;
-            // Ordinary Blizzard suffix IDs are small and are already handled
-            // correctly by the native path. The inspect workaround is
-            // specifically the extended value above 16 bits.
-            if (ParseItemLinkProperty(link, &itemID, &property) &&
-                property > 0xFFFFu) {
+            uint32_t uniqueID = 0;
+            // Realm-generated visible-item links carry their GUIDLow in the
+            // fourth field. Native links without that field stay untouched.
+            if (ParseItemLinkProperty(link, &itemID, &property, &uniqueID) &&
+                uniqueID != 0) {
                 captured.tooltip = tooltipObj;
                 captured.itemID = itemID;
                 captured.property = property;
+                captured.uniqueID = uniqueID;
                 captured.valid = true;
             }
         }
@@ -220,10 +366,13 @@ int __fastcall GetInventoryItemLink_h(void *L) {
         const int slot = static_cast<int>(Game::Lua::ToNumber(L, 2));
         uint32_t itemID = 0;
         uint32_t property = 0;
-        if (ReadRemoteVisibleItem(unitToken, slot, &itemID, &property)) {
+        uint32_t uniqueID = 0;
+        if (ReadRemoteVisibleItem(unitToken, slot, &itemID, &property,
+                                  &uniqueID)) {
             char link[256];
-            if (Item::Link::BasicFromIDProperty(itemID, property,
-                                                link, sizeof(link))) {
+            if (Item::Link::BasicFromIDPropertyUnique(itemID, property,
+                                                      uniqueID, link,
+                                                      sizeof(link))) {
                 Game::Lua::PushString(L, link);
                 return 1;
             }
@@ -280,6 +429,62 @@ const Game::HookAutoRegister _setInventoryItemHook{
     reinterpret_cast<void *>(&SetInventoryItem_h),
     reinterpret_cast<void **>(&g_setInventoryItemOriginal)};
 
+int __fastcall SetInboxItem_h(void *L) {
+    const void *tooltipObj = nullptr;
+    if (L != nullptr && Game::Lua::Type(L, 1) == Game::Lua::TYPE_TABLE)
+        tooltipObj = Game::Lua::ResolveObject(L, 1);
+
+    VisibleItemState captured;
+    if (tooltipObj != nullptr) {
+        g_visibleItem = {};
+        CaptureInboxItem(tooltipObj, L);
+        captured = g_visibleItem;
+        g_visibleItem = {};
+    }
+
+    g_pendingVisibleItem = captured;
+    const int result = g_setInboxItemOriginal(L);
+
+    g_pendingVisibleItem = {};
+    g_visibleItem = {};
+    if (captured.valid)
+        g_visibleItem = captured;
+    return result;
+}
+
+const Game::HookAutoRegister _setInboxItemHook{
+    Offsets::FUN_SCRIPT_GAMETOOLTIP_SET_INBOX_ITEM,
+    reinterpret_cast<void *>(&SetInboxItem_h),
+    reinterpret_cast<void **>(&g_setInboxItemOriginal)};
+
+int __fastcall SetAuctionItem_h(void *L) {
+    const void *tooltipObj = nullptr;
+    if (L != nullptr && Game::Lua::Type(L, 1) == Game::Lua::TYPE_TABLE)
+        tooltipObj = Game::Lua::ResolveObject(L, 1);
+
+    VisibleItemState captured;
+    if (tooltipObj != nullptr) {
+        g_visibleItem = {};
+        CaptureAuctionItem(tooltipObj, L);
+        captured = g_visibleItem;
+        g_visibleItem = {};
+    }
+
+    g_pendingVisibleItem = captured;
+    const int result = g_setAuctionItemOriginal(L);
+
+    g_pendingVisibleItem = {};
+    g_visibleItem = {};
+    if (captured.valid)
+        g_visibleItem = captured;
+    return result;
+}
+
+const Game::HookAutoRegister _setAuctionItemHook{
+    Offsets::FUN_SCRIPT_GAMETOOLTIP_SET_AUCTION_ITEM,
+    reinterpret_cast<void *>(&SetAuctionItem_h),
+    reinterpret_cast<void **>(&g_setAuctionItemOriginal)};
+
 } // namespace
 
 int CurrentID(const void *tooltipObj, uint64_t *outGuid) {
@@ -326,11 +531,13 @@ int CurrentID(const void *tooltipObj, uint64_t *outGuid) {
 }
 
 bool CurrentVisibleItem(const void *tooltipObj, uint32_t *outItemID,
-                        uint32_t *outProperty) {
+                        uint32_t *outProperty, uint32_t *outUniqueID) {
     if (outItemID != nullptr)
         *outItemID = 0;
     if (outProperty != nullptr)
         *outProperty = 0;
+    if (outUniqueID != nullptr)
+        *outUniqueID = 0;
     const VisibleItemState *state = &g_visibleItem;
     if (tooltipObj == nullptr ||
         (!state->valid || state->tooltip != tooltipObj)) {
@@ -342,6 +549,8 @@ bool CurrentVisibleItem(const void *tooltipObj, uint32_t *outItemID,
         *outItemID = state->itemID;
     if (outProperty != nullptr)
         *outProperty = state->property;
+    if (outUniqueID != nullptr)
+        *outUniqueID = state->uniqueID;
     return true;
 }
 
