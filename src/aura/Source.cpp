@@ -238,14 +238,28 @@ Entry *FindBySlot(uint64_t targetGuid, uint32_t spellId, int slot) {
     return nullptr;
 }
 
-// The newest cast capture for this aura still awaiting a descriptor slot —
-// what an `OnAuraAdded` for `(target, spell)` is seating. Newest wins because
-// SpellGo precedes the application by a packet, so the freshest unbound entry
-// is the cast that just landed; an older one is a capture that never seated
-// (fully resisted, immune) and is left to expire on its own. "Newest" is the
-// smallest `Time::Clock::Elapsed(stamp, now)` — a wrap-safe signed difference;
-// a raw `stampMs >` compare inverts across the 2^32 ms tick wrap.
-Entry *FindFreshestUnbound(uint64_t targetGuid, uint32_t spellId, uint32_t now) {
+// A capture older than this is not the one an arriving application seats. An
+// instant aura's application follows its SpellGo within a server tick plus
+// latency (a few hundred ms); a projectile's (Fireball's DoT) follows at
+// impact — up to ~1.5s of flight at max range. 3s absorbs both plus lag, yet
+// stays far below any DoT's duration, so a capture whose application never
+// came (hit but aura-rejected: death race, effect-level immunity on a mixed
+// spell) can't be seated by a later same-spell cast's application. Fully
+// resisted/immune casts never create captures at all — they sit in
+// SMSG_SPELL_GO's miss list, and ParseSpellGo reads only the hit list.
+constexpr uint32_t kSeatWindowMs = 3000;
+
+// The cast capture an `OnAuraAdded` for `(target, spell)` is seating: the
+// OLDEST unbound capture still inside the seat window — FIFO. When two
+// casters' same-spellID DoTs land in one descriptor-update batch, the server
+// assigned their slots in cast order (`_AddSpellAuraHolder`'s ascending
+// first-free-slot scan) and the client's diff dispatcher (`FUN_00604d00`)
+// fires OnAuraAdded in ascending slot order — verified: both its loops are
+// plain `slot = 0..0x2F` walks. So the FIRST application belongs to the
+// EARLIEST cast; seating newest-first paired the two casters' timers and
+// attribution backwards. Elapsed times use `Time::Clock::Elapsed` — a raw
+// `stampMs` compare inverts across the 2^32 ms tick wrap.
+Entry *FindOldestUnbound(uint64_t targetGuid, uint32_t spellId, uint32_t now) {
     Entry *best = nullptr;
     uint32_t bestElapsed = 0;
     for (int i = 0; i < g_usedHigh; ++i) {
@@ -254,7 +268,9 @@ Entry *FindFreshestUnbound(uint64_t targetGuid, uint32_t spellId, uint32_t now) 
             e.slot != SLOT_UNBOUND)
             continue;
         const uint32_t elapsed = Time::Clock::Elapsed(e.stampMs, now);
-        if (best == nullptr || elapsed < bestElapsed) {
+        if (elapsed > kSeatWindowMs)
+            continue;
+        if (best == nullptr || elapsed > bestElapsed) {
             best = &e;
             bestElapsed = elapsed;
         }
@@ -406,7 +422,7 @@ void StoreFromApplication(uint64_t targetGuid, uint32_t spellId,
 
     Entry *e = FindBySlot(targetGuid, spellId, slot);
     if (e == nullptr)
-        e = FindFreshestUnbound(targetGuid, spellId, now);
+        e = FindOldestUnbound(targetGuid, spellId, now);
     if (e == nullptr && slot < 0)
         e = FindSole(targetGuid, spellId);
     if (e == nullptr) {

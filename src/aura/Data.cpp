@@ -451,9 +451,15 @@ const char *DispelName(uint32_t dispelTypeID) {
 
 // The display fields resolved from a spell record + caster, shared by the table
 // emitter (`BuildTable`) and the positional emitter (`PushPositional`) so the
-// name / icon / dispel-name lookups live in exactly one place. `castByPlayer` is
-// the positional tuple's field #13; the table uses `isFromPlayerOrPlayerPet`
-// instead, mirroring retail's own divergence between the two aura shapes.
+// name / icon / dispel-name lookups live in exactly one place. `castByPlayer`
+// is the positional tuple's field #13 and the table's
+// `isFromPlayerOrPlayerPet` — same value, retail's two names for the two aura
+// shapes. Both mean "applied by ANY player or a player's pet" (Era
+// semantics), not the local player — that's the `PLAYER` filter's job. The
+// answer is the caster GUID's HIGHGUID prefix: player 0x0000 / pet 0xF140
+// (server-confirmed in tortoise-wow ObjectGuid.h). Vanilla totems carry the
+// creature prefix, so totem buffs read false. False on a cache miss (cast not
+// observed), since a GUID of 0 classifies as neither.
 struct Display {
     const char *name;
     const char *icon;
@@ -472,8 +478,7 @@ static Display ResolveDisplay(uint32_t spellID, uint64_t casterGuid) {
     d.name = LocalizedSpellName(spellRecord);
     d.icon = SpellIconPath(spellRecord);
     d.dispelName = DispelName(dispelTypeID);
-    d.castByPlayer =
-        casterGuid != 0 && casterGuid == Unit::Identity::PlayerGuid();
+    d.castByPlayer = Guid::IsPlayer(casterGuid) || Guid::IsPet(casterGuid);
     return d;
 }
 
@@ -523,10 +528,11 @@ static void BuildTable(void *L, uint32_t spellID, int applications,
     Game::Lua::SetFieldNumber(L, "maxCharges", 0);
     Game::Lua::SetFieldNumber(L, "timeMod", 1);
 
+    Game::Lua::SetFieldBool(L, "isFromPlayerOrPlayerPet", disp.castByPlayer);
+
     // Boolean fields whose modern semantics don't apply in vanilla.
     Game::Lua::SetFieldBool(L, "isStealable", false);
     Game::Lua::SetFieldBool(L, "isBossAura", false);
-    Game::Lua::SetFieldBool(L, "isFromPlayerOrPlayerPet", false);
     Game::Lua::SetFieldBool(L, "isNameplateOnly", false);
     Game::Lua::SetFieldBool(L, "nameplateShowAll", false);
     Game::Lua::SetFieldBool(L, "nameplateShowPersonal", false);

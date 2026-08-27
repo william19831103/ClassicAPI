@@ -55,6 +55,8 @@ build instructions.
 
 - [Combat](#combat)
   - [`InCombatLockdown()`](#incombatlockdown)
+  - [`StartAttack([target])`](#startattacktarget)
+  - [`StopAttack()`](#stopattack)
 
 - [Console](#console)
   - [`ExportInterfaceFiles art|code` (console command)](#exportinterfacefiles-artcode-console-command)
@@ -204,6 +206,7 @@ build instructions.
   - [`RegisterUnitWatch` / `UnregisterUnitWatch` / `UnitWatchRegistered`](#registerunitwatch--unregisterunitwatch--unitwatchregistered)
   - [`SecureButton_GetAttribute` / `SecureButton_GetUnit`](#securebutton_getattribute--securebutton_getunit)
   - [`PreClick` / `PostClick` button scripts](#preclick--postclick-button-scripts)
+  - [`GetClickFrame(name)`](#getclickframename)
 
 - [FriendList](#friendlist)
   - [`C_FriendList.SendWhoQueryByName(name)`](#c_friendlistsendwhoquerybynamename)
@@ -1455,6 +1458,26 @@ if UnitAffectingCombat("player") then
     -- this is the real check
 end
 ```
+
+### `StartAttack([target])`
+
+Starts your melee auto-attack. The vanilla `AttackTarget()` turns the attack on
+or off with each call. `StartAttack` only starts it — a call while you attack
+your current target does not toggle the attack off. So a `/startattack` macro
+can use it safely.
+
+With no argument, it attacks your current target. With a unit token (`"target"`,
+`"focus"`, `"party1"`), it attacks that unit. A name or an unknown token uses the
+current target instead. If there is no valid target, nothing happens.
+
+```lua
+StartAttack()            -- attack the current target; never cancels an attack
+StartAttack("focus")     -- attack your focus unit
+```
+
+### `StopAttack()`
+
+Stops your melee auto-attack. If you are not attacking, the call does nothing.
 
 ## Console
 
@@ -4994,6 +5017,21 @@ fire around `OnClick`. A button with no `OnClick` set fires neither. This serves
 the normal use: run code just before or after a button's click action. (Modern
 WoW fires them even with no `OnClick`; that path is not available on this
 client.)
+
+### `GetClickFrame(name)`
+
+Returns the frame with the given global name. The `/click` command uses it to
+change a frame name into the frame.
+
+The function returns the frame only when `_G[name]` holds a real frame, and the
+`GetName()` of that frame is equal to `name`. If the global holds a different
+value, a plain table, or a frame with a different name, the function returns
+nil. This name test makes sure that a changed global does not return the wrong
+frame.
+
+```lua
+GetClickFrame("MyButton")     -- the frame named "MyButton", or nil
+```
 
 ## FriendList
 
@@ -15299,7 +15337,8 @@ these functions surface them, exactly as the built-in `UnitBuff` /
 | `sourceGUID` | string | caster's `"0x…"` GUID string from the same cache. **ClassicAPI extension — not a retail `AuraData` field.** Set whenever a caster is known, including when `sourceUnit` is `nil` (caster left token range). Stable for the session, unlike the volatile nameplate token; doubles as a unit token under SuperWoW. `nil` on a cache miss |
 | `charges` / `maxCharges` | number | always `0` — vanilla has stacks, not charges |
 | `timeMod` | number | always `1` — vanilla has no haste-affected auras |
-| `isStealable`, `isBossAura`, `isFromPlayerOrPlayerPet`, `isNameplateOnly`, `nameplateShowAll`, `nameplateShowPersonal`, `canApplyAura`, `shouldConsolidate`, `isRaid` | boolean | always `false` — modern UI concepts vanilla doesn't have |
+| `isFromPlayerOrPlayerPet` | boolean | true when a player — any player, not only you — or a player's pet applied the aura. Read from the cached caster GUID, so it is `false` when the cast was not seen this session. Totem buffs read `false`: a vanilla totem is a creature, not a pet |
+| `isStealable`, `isBossAura`, `isNameplateOnly`, `nameplateShowAll`, `nameplateShowPersonal`, `canApplyAura`, `shouldConsolidate`, `isRaid` | boolean | always `false` — modern UI concepts vanilla doesn't have |
 | `auraInstanceID`, `points` | (absent) | omitted from the table — Lua read yields nil, matching modern semantics for "field doesn't apply" |
 
 ### Filter parsing
@@ -15460,14 +15499,15 @@ nameplateShowAll, timeMod
 Returns a single `nil` when the unit has fewer than `index` matching auras.
 `dispelType` is the dispel-type string (`"Magic"`, `"Curse"`, `"Disease"`,
 `"Poison"`, or `nil`). `source` is the caster's unit token, or `nil` when the cast
-was not seen this session. `castByPlayer` is true when the local player cast the
-aura. `filter` takes the same tokens as `GetAuraDataByIndex`.
+was not seen this session. `castByPlayer` is true when a player — any player, not
+only you — or a player's pet applied the aura, and false when the cast was not
+seen this session. `filter` takes the same tokens as `GetAuraDataByIndex`.
 
 The values are the `GetAuraDataByIndex` fields in the classic `UnitAura` order,
 with two field-name differences from the table: position 12 is `isBossDebuff`
 (the table field is `isBossAura`) and position 13 is `castByPlayer` (the table
-field is `isFromPlayerOrPlayerPet`). On 1.12 the boss field is always false;
-`castByPlayer` is reported truthfully.
+field is `isFromPlayerOrPlayerPet`, the same value). On 1.12 the boss field is
+always false; `castByPlayer` is reported truthfully.
 
 ### `C_UnitAuras.UnitBuff(unit, index [, filter])` / `UnitDebuff(unit, index [, filter])`
 

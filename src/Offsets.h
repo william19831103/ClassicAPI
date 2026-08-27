@@ -6425,6 +6425,23 @@ enum Offsets {
     FUN_GET_OBJECT_BY_GUID = 0x00468460,
     OBJECT_TYPE_ITEM = 2,
 
+    // Melee auto-attack primitives (back StartAttack / StopAttack). 1.12
+    // exposes only the toggling AttackTarget (0x00489B50 -> FUN_006131A0);
+    // these are the non-toggling start/stop it calls internally.
+    //   START: __thiscall(player, const uint64_t *targetGuid). Validates
+    //     CanAttack on the target, sends CMSG_ATTACKSWING (opcode 0x141), and
+    //     stamps the victim GUID at [player+0xC48]. Idempotent / switch-aware
+    //     on a valid target (never stops an in-progress attack); an
+    //     unattackable target while attacking routes to STOP.
+    //   STOP: __fastcall(player). Clears the attack state; self-guards on the
+    //     attack flag, so it is a no-op (safe) when not attacking.
+    //   RESOLVE_TARGET: __thiscall(player, uint64_t *outGuid) -> int. Validates
+    //     the player's CURRENT target (charm/fear/confuse redirect + CanAttack)
+    //     and writes its GUID; returns 0 (and posts the UI error) if invalid.
+    FUN_ATTACK_START = 0x005ECB70,
+    FUN_ATTACK_STOP = 0x005ECAC0,
+    FUN_ATTACK_RESOLVE_TARGET = 0x00612DF0,
+
     // Inbox — array of mail-entry pointers behind a slot indirection.
     // The address itself holds a heap pointer (`MOV ECX, [imm32]` in
     // the engine), so reading the array requires one extra deref

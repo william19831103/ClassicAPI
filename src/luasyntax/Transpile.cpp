@@ -79,11 +79,12 @@
 //     `...` yields the name + a per-addon shared table. `__addonns` returns the
 //     same table for every file of an addon (registry-backed). The preamble is
 //     newline-free (line numbers preserved).
-//   * Non-addon vararg chunks (RunScript `/run`, XML <OnLoad>, loadstring) get a
-//     `local arg = {n=0}` fallback: their main chunk is not vararg, so a
-//     top-level `...` would otherwise be `unpack(nil)` and throw where 5.1
-//     yields nothing. A chunk called with args (`loadstring(...)(a,b)`) can't
-//     recover them — this build doesn't populate `arg` for called chunks.
+//   * Non-addon vararg chunks (RunScript `/run`, XML handler bodies,
+//     `loadstring`) compile as a REAL 5.0 vararg closure: the body is wrapped
+//     `return function(...) … end` and the main is called once at load, so
+//     the caller receives the inner function whose own `arg` carries real
+//     call args — `loadstring("return ...")(a, b)` yields a, b, matching 5.1
+//     called-chunk semantics (the old `local arg={n=0}` fallback lost them).
 //     The `__addonns` global is CONTEXT-GATED (see `Script_AddonNS`): it only
 //     answers for the addon mid-load, for its own name — so it cannot be used
 //     at runtime to read another addon's private table. Cross-addon access is
@@ -1300,6 +1301,7 @@ int __fastcall LoadBuffer_h(void *L, const char *buff, unsigned size, const char
         pre += "local unpack=unpack;";
 
     bool armed = false;
+    bool wrapped = false;
     char addon[128];
     if (didVararg) {
         if (fromFileFunnel && AddonNameFromChunk(name, addon, sizeof addon)) {
@@ -1311,20 +1313,26 @@ int __fastcall LoadBuffer_h(void *L, const char *buff, unsigned size, const char
             armed = true;
         } else {
             // Top-level `...` OUTSIDE the addon file funnel — RunScript (`/run`),
-            // XML <OnLoad>, or loadstring. Vanilla's main / RunScript chunk is
-            // NOT vararg, so `arg` is nil there and the `unpack(arg)` we emit
-            // would throw where 5.1's `...` yields nothing. Bind a chunk-local
-            // empty vararg table so those chunks match 5.1 (top-level `...`
-            // yields nothing). A vararg function's own `arg` local shadows this
-            // at its own scope, so nested `function(...)` bodies are unaffected.
-            //
-            // Limitation (verified in-game): a loadstring'd chunk CALLED with
-            // args — `loadstring("return ...")(a,b)` — can't recover them. This
-            // build does not populate `arg` for a called chunk, and `...` is not
-            // a real 5.0 expression, so there is no source for the call args.
-            // Not a regression: without the rewrite that chunk fails to compile
-            // outright. This case is vanishingly rare in addons.
-            pre += "local arg={n=0};";
+            // XML handler bodies, or loadstring. Vanilla's main chunk is NOT
+            // vararg (verified in-game): `arg` is nil there, and no rewrite can
+            // read call args the VM never captured. So compile the chunk as a
+            // REAL 5.0 vararg closure instead: wrap the body in
+            // `return function(...) … end` and, after a successful compile,
+            // call the main once so the caller receives the inner function.
+            // The inner's own 5.0 `arg` then carries whatever the caller
+            // passes — `loadstring("return ...")(a, b)` yields a, b — matching
+            // 5.1 called-chunk semantics. Chunks the engine calls with zero
+            // args (RunScript, OnLoad) see an empty `arg` exactly as the old
+            // `local arg={n=0}` fallback gave them; XML handlers invoked
+            // through Frame::ScriptArgs' positional push now receive those
+            // args through `...` as well — the modern handler shape. The
+            // helper captures stay in the OUTER main, which runs once at load
+            // in the default environment, so the sandbox rationale above is
+            // preserved (the inner binds them as upvalues). The prefix is
+            // newline-free and the synthetic `end` rides on its own appended
+            // final line, so existing line numbers are preserved.
+            pre += "return function(...) ";
+            wrapped = true;
         }
     }
 
@@ -1341,10 +1349,15 @@ int __fastcall LoadBuffer_h(void *L, const char *buff, unsigned size, const char
                            ? 3
                            : 0;
     std::string full;
-    full.reserve(bodyLen + pre.size() + 4);
+    full.reserve(bodyLen + pre.size() + 8);
     full.append(body, bom); // keep a leading BOM ahead of the preamble
     full += pre;
     full.append(body + bom, bodyLen - bom);
+    // Close the vararg wrap on its OWN line: a body ending in a line comment
+    // (`-- foo` with no trailing newline) would otherwise swallow the `end`.
+    // Appending a final line shifts no existing line numbers.
+    if (wrapped)
+        full += "\nend";
 
     // Grant this chunk (and only this chunk) the right to fetch its own
     // namespace via `__addonns`; the preamble consumes the grant as the chunk's
@@ -1357,6 +1370,12 @@ int __fastcall LoadBuffer_h(void *L, const char *buff, unsigned size, const char
         g_origLoadBuffer(L, full.data(), static_cast<unsigned>(full.size()), name);
     if (armed && rc != 0)
         g_loadingAddon[0] = '\0';
+    // Materialize the wrapped chunk's inner function. The main is helper-local
+    // binds plus `return function(...) … end` — closure creation only, it
+    // cannot raise — so a plain lua_call is safe, and it leaves the inner
+    // function exactly where the engine expects the compiled chunk.
+    if (wrapped && rc == 0)
+        Game::Lua::Call(L, 0, 1);
     return rc;
 }
 
