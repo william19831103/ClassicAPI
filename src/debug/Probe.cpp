@@ -64,11 +64,8 @@ namespace Debug::Probe {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 const uint8_t *ResolvePlayer() {
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    return static_cast<const uint8_t *>(fn("player"));
+    return static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
 }
 
 const uint8_t *ResolvePlayerDescriptor() {

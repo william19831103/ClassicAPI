@@ -19,6 +19,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 namespace Spell::Info {
 
@@ -179,15 +180,44 @@ static bool BookTypeIsPet(const char *s) {
     return lc(s[0]) == 'p' && lc(s[1]) == 'e' && lc(s[2]) == 't' && s[3] == '\0';
 }
 
-// Resolves the Lua args to a spellID, supporting:
-//   GetSpellInfo(spellID)              -- arg2 absent or non-string
-//   GetSpellInfo(slot, "spell"|"pet")  -- arg2 string → spellbook lookup
-// Returns 0 for invalid/empty inputs (Lua side surfaces 0 as nil since
-// spellID 0 is never valid). Calls `lua_error` if arg1 isn't a number,
-// matching the engine's own `lua_error`-on-misuse style.
+// Parses a spellID out of a spell hyperlink ("…|Hspell:<id>[:…]…").
+// Returns 0 when `s` isn't a spell link, so the caller can fall through
+// to a plain-name lookup.
+static int SpellIDFromLink(const char *s) {
+    if (s == nullptr)
+        return 0;
+    const char *p = std::strstr(s, "Hspell:");
+    if (p == nullptr)
+        return 0;
+    p += 7; // past "Hspell:"
+    if (*p < '0' || *p > '9')
+        return 0;
+    int id = 0;
+    while (*p >= '0' && *p <= '9')
+        id = id * 10 + (*p++ - '0');
+    return id;
+}
+
+// Resolves the Lua args to a spellID, supporting the full retail
+// GetSpellInfo argument set:
+//   GetSpellInfo(spellID)              -- arg1 number, arg2 non-string
+//   GetSpellInfo(slot, "spell"|"pet")  -- arg1 number, arg2 string → book slot
+//   GetSpellInfo("name")               -- arg1 string → spellbook name lookup
+//   GetSpellInfo("…|Hspell:ID|h…")      -- arg1 string → link's embedded spellID
+// A name resolves against the player's/pet's spellbook (retail's scope),
+// returning the highest known rank; an unknown name yields 0. Returns 0
+// for invalid/empty inputs (Lua side surfaces 0 as nil since spellID 0 is
+// never valid). Only a non-string, non-number arg1 raises `lua_error` —
+// a name retail doesn't recognize returns nil, it does not error.
 static int ResolveLuaArgsToSpellID(void *L) {
+    if (Game::Lua::Type(L, 1) == Game::Lua::TYPE_STRING) {
+        const char *s = Game::Lua::ToString(L, 1);
+        const int fromLink = SpellIDFromLink(s);
+        return fromLink > 0 ? fromLink : Spell::Lookup::SpellNameToID(s);
+    }
     if (!Game::Lua::IsNumber(L, 1)) {
-        Game::Lua::Error(L, "Usage: GetSpellInfo(spellID) or GetSpellInfo(slot, bookType)");
+        Game::Lua::Error(L, "Usage: GetSpellInfo(spellID | \"name\" | link) "
+                            "or GetSpellInfo(slot, bookType)");
         return 0;
     }
     const int arg1 = static_cast<int>(Game::Lua::ToNumber(L, 1));

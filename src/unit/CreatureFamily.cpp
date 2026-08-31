@@ -44,8 +44,6 @@ namespace Unit::CreatureFamily {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 int __fastcall Script_UnitCreatureFamilyID(void *L) {
     if (!Game::Lua::IsString(L, 1)) {
         Game::Lua::Error(L, "Usage: UnitCreatureFamilyID(\"unit\")");
@@ -55,9 +53,7 @@ int __fastcall Script_UnitCreatureFamilyID(void *L) {
     if (token == nullptr)
         return 0;
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(
-        Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *unit = static_cast<const uint8_t *>(resolve(token));
+    auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
     if (unit == nullptr)
         return 0;
 

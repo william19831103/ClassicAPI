@@ -65,15 +65,12 @@ bool g_havePrevBodyYaw = false;
 float g_prevCameraYaw = 0.0f;
 bool g_havePrevCameraYaw = false;
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 const uint8_t *Controller() {
     return Game::Read<const uint8_t *>(Offsets::VAR_UI_INPUT_CONTROLLER);
 }
 
 const uint8_t *Player() {
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    return static_cast<const uint8_t *>(fn("player"));
+    return static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
 }
 
 const uint8_t *Camera() {

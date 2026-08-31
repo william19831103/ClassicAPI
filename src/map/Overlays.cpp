@@ -377,15 +377,12 @@ void PushTiles(void *L, const ResolvedOverlay *r, const char *basePath,
     }
 }
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // The local player's explored-areas bitfield (`[player+0xE68] + 0xE6C`), or
 // null before the player is resident. Bit `AreaBit` set == that AreaTable
 // area is explored. Same storage the engine's discovered-overlay rebuild
 // (FUN_004a67a0) reads.
 const uint8_t *ExplorationBits() {
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<const uint8_t *>(fn("player"));
+    auto *player = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
     if (player == nullptr)
         return nullptr;
     auto *sub = Game::Read<const uint8_t *>(player, Offsets::OFF_CGPLAYER_INFO);

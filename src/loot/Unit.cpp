@@ -22,8 +22,6 @@ namespace Loot::Unit {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // `FUN_CMSG_LOOT_UNIT` is `__thiscall(player, target, useDistanceCheck)`.
 // MSVC `__thiscall` puts `player` in ECX and the rest on the stack —
 // matching the engine's own callsite at `FUN_0060FA20`. The trailing
@@ -74,9 +72,7 @@ int __fastcall Script_LootUnit(void *L) {
     // `ResolveUnitToken("player")` gives the canonical CGPlayer_C the
     // engine uses for `__thiscall` calls — distinct from the global
     // at `VAR_LOCAL_PLAYER_PTR` (see the comment on that offset).
-    auto ResolveUnitToken = reinterpret_cast<ResolveUnitToken_t>(
-        Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    void *player = ResolveUnitToken("player");
+    void *player = Game::ResolveUnitToken("player");
     if (player == nullptr)
         return 0;
 

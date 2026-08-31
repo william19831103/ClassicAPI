@@ -97,3 +97,19 @@ end
 if C_AddOns.DoesAddOnExist("Cartographer") and not WorldMapDeathRelease then
     CreateFrame("Button", "WorldMapDeathRelease", WorldMapButton or UIParent):Hide()
 end
+
+-- ModernSpellBook (Spellbook\MSB_Spellbook.lua) re-hooks its "show all ranks"
+-- checkbox by calling HookScript as a GLOBAL -- HookScript(frame, "OnClick",
+-- handler). That global never existed on any client: HookScript has always
+-- been the widget method frame:HookScript, which our DLL provides. MSB even
+-- guards the call with `if checkbox.HookScript` (the method IS present), then
+-- calls the global (nil) -> "attempt to call global 'HookScript'". Define the
+-- global so the call resolves, forwarding to the method. Gated on the addon
+-- being present so the global namespace stays clean otherwise.
+if C_AddOns.DoesAddOnExist("ModernSpellBook") and not HookScript then
+    function HookScript(frame, script, handler)
+        if frame and frame.HookScript then
+            frame:HookScript(script, handler)
+        end
+    end
+end

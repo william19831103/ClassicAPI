@@ -57,6 +57,19 @@ inline T &Ref(uintptr_t address) {
     return *reinterpret_cast<T *>(address);
 }
 
+// --- Engine primitives ------------------------------------------------------
+
+// Resolve a unit token (`"player"`, `"target"`, `"party3"`, `"nameplate1"`,
+// …) to its live `CGUnit_C *`, through the engine's own resolver
+// (`FUN_RESOLVE_UNIT_TOKEN`). Returns null for a valid token that currently
+// has no unit (e.g. `"target"` with nothing targeted). NOTE: the engine
+// RAISES a Lua error for a string that isn't a valid token form (an arbitrary
+// name like `"Bob"`), so only pass real unit tokens — the same contract every
+// stock `Unit*` global carries. Centralizes the
+// `reinterpret_cast<…>(FUN_RESOLVE_UNIT_TOKEN)` idiom that was copy-pasted
+// across a dozen modules.
+void *ResolveUnitToken(const char *token);
+
 using FrameScript_Initialize_t = bool(__fastcall *)();
 using LoadScriptFunctions_t = void(__fastcall *)();
 

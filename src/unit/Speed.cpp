@@ -20,12 +20,10 @@ namespace Unit::Speed {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using GetEffectiveSpeed_t = float(__thiscall *)(void *movementInfo, int forceWalk);
 
 const uint8_t *MovementInfoForToken(const char *token) {
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *unit = static_cast<const uint8_t *>(resolve(token));
+    auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
     if (unit == nullptr)
         return nullptr;
     return *reinterpret_cast<const uint8_t *const *>(

@@ -16,6 +16,8 @@
 #include "Offsets.h"
 #include "dbc/Lookup.h"
 
+#include <cstring>
+
 namespace Spell::Lookup {
 
 const uint8_t *RecordForID(int spellID) {
@@ -105,6 +107,79 @@ int FindSpellbookSlot(int spellID, int *outBookType) {
                 *outBookType = 1;
             return i + 1;
         }
+    }
+    return 0;
+}
+
+int SpellNameToID(const char *name) {
+    if (name == nullptr || *name == '\0')
+        return 0;
+    const int locale = *reinterpret_cast<const int *>(
+        static_cast<uintptr_t>(Offsets::VAR_LOCALE_INDEX));
+
+    // A trailing "(subtext)" pins a specific rank — the vanilla
+    // "SpellName(Rank N)" addressing that CastSpellByName and friends use
+    // (a space before the paren is tolerated: "Mind Blast (Rank 8)"). The
+    // subtext is matched against the record's localized Rank field. With no
+    // subtext, we return the highest known rank of the base name.
+    char base[256];
+    char wantRank[64];
+    bool haveRank = false;
+    {
+        const char *open = std::strrchr(name, '(');
+        const char *close = (open != nullptr) ? std::strrchr(name, ')') : nullptr;
+        size_t baseLen;
+        if (open != nullptr && close != nullptr && close > open + 1) {
+            baseLen = static_cast<size_t>(open - name);
+            size_t rankLen = static_cast<size_t>(close - open - 1);
+            if (rankLen >= sizeof(wantRank))
+                rankLen = sizeof(wantRank) - 1;
+            std::memcpy(wantRank, open + 1, rankLen);
+            wantRank[rankLen] = '\0';
+            haveRank = true;
+        } else {
+            baseLen = std::strlen(name);
+        }
+        while (baseLen > 0 &&
+               (name[baseLen - 1] == ' ' || name[baseLen - 1] == '\t'))
+            --baseLen; // trim any space between the name and the paren
+        if (baseLen == 0 || baseLen >= sizeof(base))
+            return 0;
+        std::memcpy(base, name, baseLen);
+        base[baseLen] = '\0';
+    }
+
+    // Player book first, then pet — retail's precedence. For a plain name we
+    // keep the LAST matching slot: a spell's ranks are stored in ascending
+    // order, so the final match is the highest rank the player knows. For a
+    // rank subtext we return the exact name+rank match.
+    const uintptr_t books[2] = {Offsets::VAR_PLAYER_SPELLBOOK,
+                                Offsets::VAR_PET_SPELLBOOK};
+    for (uintptr_t bookBase : books) {
+        auto *array = reinterpret_cast<const int *>(bookBase);
+        int best = 0;
+        for (int i = 0; i < Offsets::SPELLBOOK_MAX_SLOTS; ++i) {
+            const int spellID = array[i];
+            if (spellID <= 0)
+                continue; // BSS-zeroed empty slot
+            const uint8_t *record = RecordForID(spellID);
+            if (record == nullptr)
+                continue;
+            const char *sname = *reinterpret_cast<const char *const *>(
+                record + Offsets::OFF_SPELL_NAMES + locale * 4);
+            if (sname == nullptr || std::strcmp(sname, base) != 0)
+                continue;
+            if (!haveRank) {
+                best = spellID; // highest rank (last match)
+                continue;
+            }
+            const char *srank = *reinterpret_cast<const char *const *>(
+                record + Offsets::OFF_SPELL_RECORD_RANK + locale * 4);
+            if (srank != nullptr && std::strcmp(srank, wantRank) == 0)
+                return spellID; // exact name + rank
+        }
+        if (!haveRank && best != 0)
+            return best;
     }
     return 0;
 }

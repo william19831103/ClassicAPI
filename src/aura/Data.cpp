@@ -77,13 +77,9 @@ const char *SpellIconPath(const uint8_t *spellRecord) {
                             Offsets::OFF_SPELLICON_PATH);
 }
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *);
-
 // Returns the local player's CGUnit pointer, or nullptr pre-login.
 const uint8_t *LocalPlayer() {
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(
-        static_cast<uintptr_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN));
-    return static_cast<const uint8_t *>(fn("player"));
+    return static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
 }
 
 // Looks up the player-buff-table entry for a given spellID. The table

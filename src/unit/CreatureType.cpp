@@ -41,7 +41,6 @@ namespace Unit::CreatureType {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using CreatureType_t = int(__fastcall *)(void *unit);
 
 int __fastcall Script_UnitCreatureTypeID(void *L) {
@@ -53,9 +52,7 @@ int __fastcall Script_UnitCreatureTypeID(void *L) {
     if (token == nullptr)
         return 0;
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(
-        Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    void *unit = resolve(token);
+    void *unit = Game::ResolveUnitToken(token);
     if (unit == nullptr)
         return 0;
 

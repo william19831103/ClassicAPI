@@ -84,6 +84,21 @@ uint32_t RefreshDurationByFamily(uint64_t unitGuid, uint32_t family,
 // Aura::JudgementRefresh's SMSG_ATTACKERSTATEUPDATE subscriber.
 int RefreshJudgements(uint64_t unitGuid, uint64_t attackerGuid);
 
+// Re-anchors the expiration of every cached aura the local player cast with
+// `spellId` to `now + remainingMs`. Mirrors the server's channel pushback
+// (Spell::DelayedChannel → Unit::DelaySpellAuraHolder): a hit shortens the
+// channel AND every hit target's holder of the channel spell by the same
+// amount, then tells the caster the new remaining time via MSG_CHANNEL_UPDATE
+// — the packet Spell::Cast feeds this from. Without it a pushed-back channel's
+// target-side aura (Dark Harvest, the drains) keeps its full-length SpellGo
+// expiration and reads late by the accumulated pushback. `durationMs` (the
+// applied total, the bar's full width) is deliberately untouched. Self-target
+// holders are also corrected natively by the server (it re-sends
+// SMSG_UPDATE_AURA_DURATION), so restamping those entries just keeps the two
+// sources agreeing. Caster-only packet ⇒ only the player's channels are
+// correctable; remote pushback stays invisible (see spell/Cast.cpp).
+void RestampPlayerChannel(uint32_t spellId, uint32_t remainingMs);
+
 // Op codes for AddDurationMod (mirror the Lua op strings).
 enum DurationModOp {
     DURATION_MOD_REFRESH = 0,
@@ -135,6 +150,25 @@ bool AddTriggeredApplicationByFamily(uint32_t triggerFamily,
                                      uint64_t triggerMask, uint32_t gateSpellId,
                                      uint32_t affectedFamily,
                                      uint64_t affectedMask, int32_t durationPct);
+
+// Register a tick-speed compression rule from C++: while an aura matching
+// (triggerFamily, triggerMask) is live on a target, every cached aura on that
+// target CAST BY THE SAME CASTER matching (affectedFamily, affectedMask) — and
+// whose record carries a periodic damage/leech effect, the server's aura-type
+// gate — drains an extra `pct`% of real time: its expiration moves earlier by
+// pct% of the elapsed overlap. Mirrors a server that preserves an accelerated
+// dot's tick COUNT, so ticking pct% faster consumes it pct% faster with no
+// client-visible aura change (Turtle's Dark Harvest; see
+// src/turtle/DarkHarvest.cpp for the live-behavior derivation). Caster-paired
+// like the server's own check, so another warlock's observed DH compresses
+// THEIR dots' cached timing too; caster-less entries never compress. The
+// trigger's cache-entry lifetime is the compression window — created by its
+// SpellGo, shortened by channel pushback (RestampPlayerChannel), evicted by
+// OnAuraRemoved on interrupt / early end — so the window tracks every edge the
+// server's has. Returns false on bad input or a full table.
+bool AddTickCompression(uint32_t triggerFamily, uint64_t triggerMask,
+                        uint32_t affectedFamily, uint64_t affectedMask,
+                        int32_t pct);
 
 // One cached aura, as returned by `Enumerate`.
 struct CachedAura {

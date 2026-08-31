@@ -19,8 +19,6 @@ namespace Unit::RaceBase {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // `UnitRaceBase(unit) → (raceFile, raceID)` — returns the locale-
 // independent race token (`"Human"`, `"Orc"`, `"Dwarf"`, `"NightElf"`,
 // `"Scourge"`, `"Tauren"`, `"Gnome"`, `"Troll"`) plus the numeric
@@ -61,8 +59,7 @@ int __fastcall Script_UnitRaceBase(void *L) {
     if (Unit::Identity::IsPlayerToken(token)) {
         raceByte = Game::Read<uint8_t>(Offsets::VAR_PLAYER_RACE_BYTE);
     } else {
-        auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-        auto *unit = static_cast<const uint8_t *>(resolve(token));
+        auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
         if (unit != nullptr) {
             auto *desc =
                 Game::Read<const uint8_t *>(unit, Offsets::OFF_UNIT_DESCRIPTOR);

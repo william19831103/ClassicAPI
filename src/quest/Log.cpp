@@ -21,8 +21,6 @@ namespace Quest::Log {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // Walks the unit's `+0xE68` sub-struct quest list (20 slots, stride
 // 0xC) and returns true on first match. Mirrors the engine's loop in
 // `Script_IsUnitOnQuest` (`0x004DFE10`).
@@ -225,9 +223,7 @@ static int __fastcall Script_IsUnitOnQuest(void *L) {
         return 1;
     }
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(
-        static_cast<uintptr_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN));
-    auto *unit = static_cast<const uint8_t *>(resolve(token));
+    auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
     Game::Lua::PushBool(L, UnitHasQuest(unit, target));
     return 1;
 }

@@ -21,15 +21,12 @@ namespace Spell::Mod {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // The local player's class SpellFamilyName, or 0 if it can't be resolved
 // (e.g. at the login screen). Gates the SpellMod family match — only
 // spells of the player's own class family receive the player's mods, so
 // a same-flag-bit spell of another family isn't falsely modified.
 uint32_t PlayerSpellFamily() {
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *unit = static_cast<const uint8_t *>(resolve("player"));
+    auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
     if (unit == nullptr)
         return 0;
     auto *desc = Game::Read<const uint8_t *>(unit, Offsets::OFF_UNIT_DESCRIPTOR);

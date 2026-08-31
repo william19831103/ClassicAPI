@@ -50,12 +50,10 @@ namespace Item::Usable {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using SpellIsUsable_t = int(__fastcall *)(const uint8_t *spellRecord, int *outNoMana);
 
 const uint8_t *PlayerDescriptor() {
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<const uint8_t *>(resolve("player"));
+    auto *player = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
     if (player == nullptr)
         return nullptr;
     return *reinterpret_cast<const uint8_t *const *>(

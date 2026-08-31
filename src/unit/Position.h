@@ -13,6 +13,7 @@
 
 #pragma once
 
+#include "Game.h"
 #include "Offsets.h"
 
 // Shared world-position read for any CGObject-derived unit. The
@@ -32,9 +33,7 @@ namespace Unit::Position {
 inline void *ResolveToken(const char *token) {
     if (token == nullptr)
         return nullptr;
-    using ResolveUnitToken_t = void *(__fastcall *)(const char *);
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    return fn(token);
+    return Game::ResolveUnitToken(token);
 }
 
 // Reads `obj`'s world position into `out[3]` (x, y, z). Calls

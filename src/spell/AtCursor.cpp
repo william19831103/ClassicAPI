@@ -58,10 +58,7 @@ bool InWorld() {
     // Player resolves only when in-world. Same gate other modules
     // (e.g. `Item::Location::ResolveBag`) use to avoid touching
     // engine state during loading screens or glue.
-    using ResolveUnitToken_t = void *(__fastcall *)(const char *);
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(
-        Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    return fn("player") != nullptr;
+    return Game::ResolveUnitToken("player") != nullptr;
 }
 
 void CancelPlacement() {

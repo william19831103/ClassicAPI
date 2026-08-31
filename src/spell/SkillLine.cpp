@@ -21,7 +21,6 @@ namespace Spell::SkillLine {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using SkillLineToSlot_t = int(__thiscall *)(void *player, uint32_t skillLineID);
 
 // Reads UNIT_FIELD_BYTES_0 from the local player's descriptor. Same
@@ -31,8 +30,7 @@ using SkillLineToSlot_t = int(__thiscall *)(void *player, uint32_t skillLineID);
 void ReadPlayerClassRace(uint8_t *outClassByte, uint8_t *outRaceByte) {
     *outClassByte = 0;
     *outRaceByte = 0;
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<const uint8_t *>(fn("player"));
+    auto *player = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
     if (player == nullptr)
         return;
     auto *desc = Game::Read<const uint8_t *>(
@@ -232,8 +230,7 @@ int __fastcall Script_GetSkillLineRank(void *L) {
         return 1;
     }
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<uint8_t *>(resolve("player"));
+    auto *player = static_cast<uint8_t *>(Game::ResolveUnitToken("player"));
     if (player == nullptr) {
         Game::Lua::PushNil(L);
         return 1;

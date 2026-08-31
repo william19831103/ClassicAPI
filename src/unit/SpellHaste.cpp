@@ -41,8 +41,6 @@ namespace Unit::SpellHaste {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 const uint8_t *Descriptor(const uint8_t *unit) {
     if (unit == nullptr)
         return nullptr;
@@ -53,8 +51,7 @@ const uint8_t *Descriptor(const uint8_t *unit) {
 const uint8_t *ResolveUnit(const char *token) {
     if (token == nullptr)
         return nullptr;
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    return static_cast<const uint8_t *>(fn(token));
+    return static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
 }
 
 // `UnitSpellHaste("unit")` — spell haste percentage. `0` for an unhasted or

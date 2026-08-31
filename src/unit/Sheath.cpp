@@ -18,8 +18,6 @@
 
 namespace Unit::Sheath {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // `GetSheathState()` — returns which weapon type the local player currently
 // has drawn. Takes no arguments. The return is **1-based**, matching modern
 // WoW's contract:
@@ -39,8 +37,7 @@ using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 // null for `"player"` out of world rather than raising, so this is safe from
 // any context.
 static int __fastcall Script_GetSheathState(void *L) {
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<const uint8_t *>(resolve("player"));
+    auto *player = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
 
     int state = 0;
     if (player != nullptr)

@@ -49,8 +49,6 @@ using ClntObjMgrEnumVisibleObjectsCallback_t = int(__fastcall *)(void *ctx,
 using ClntObjMgrEnumVisibleObjects_t =
     int(__fastcall *)(ClntObjMgrEnumVisibleObjectsCallback_t cb, void *ctx);
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // `__thiscall(self, outBuf) → const C3Vector *` at vtable slot 5
 // (byte offset `0x14`). Both CGUnit_C and CGPlayer_C populate the
 // caller-provided 12-byte buffer with the unit's world position and
@@ -182,9 +180,7 @@ int __fastcall Script_GetNearbyLootableUnits(void *L) {
     // Resolve the local player once — the canonical CGPlayer_C the
     // engine's own interact-range checks use, distinct from the
     // `VAR_LOCAL_PLAYER_PTR` global. Bail if unavailable.
-    auto ResolveUnitToken = reinterpret_cast<ResolveUnitToken_t>(
-        Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    const void *player = ResolveUnitToken("player");
+    const void *player = Game::ResolveUnitToken("player");
     if (player == nullptr)
         return 1;
 

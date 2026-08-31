@@ -34,15 +34,12 @@ namespace Spell::IsCurrent {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 int ReadGlobalSpellID(uintptr_t addr) {
     return *reinterpret_cast<const int *>(addr);
 }
 
 int ReadPlayerChannelSpell() {
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<const uint8_t *>(resolve("player"));
+    auto *player = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
     if (player == nullptr)
         return 0;
     auto *desc = *reinterpret_cast<const uint8_t *const *>(

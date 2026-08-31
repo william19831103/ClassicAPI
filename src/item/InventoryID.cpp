@@ -24,11 +24,9 @@ namespace {
 
 using GetItemBySlot_t = void *(__thiscall *)(void *invMgr, int slot);
 using GetVisibleItem_t = void *(__thiscall *)(void *unit, int slot);
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 
 void *ResolveUnit(const char *token) {
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    return fn(token);
+    return Game::ResolveUnitToken(token);
 }
 
 // Walks the local player's private inventory manager — the same path

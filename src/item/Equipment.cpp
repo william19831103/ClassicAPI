@@ -200,11 +200,8 @@ int __fastcall Script_C_Item_EquipItemByName(void *L) {
     if (!Item::Cursor::PickupBagItem(L, found.bagID, found.slotIndex))
         return 0;
 
-    using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
     using AutoEquipCursor_t = void (__thiscall *)(void *player, int flag);
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(
-        Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    if (auto *player = resolve("player")) {
+    if (auto *player = Game::ResolveUnitToken("player")) {
         auto equip = reinterpret_cast<AutoEquipCursor_t>(
             Offsets::FUN_AUTO_EQUIP_CURSOR_ITEM);
         equip(player, 0);

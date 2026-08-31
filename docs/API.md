@@ -621,6 +621,7 @@ build instructions.
   - [`UnitIsPet(unit)`](#unitispetunit)
   - [`UnitIsOtherPlayersPet(unit)`](#unitisotherplayerspetunit)
   - [`UnitOwnerGUID(unit)`](#unitownerguidunit)
+  - [`UnitCreatedBySpell(unit)`](#unitcreatedbyspellunit)
   - [`UnitStandState(unit)`](#unitstandstateunit)
   - [`UnitInRange(unit)`](#unitinrangeunit)
   - [`UnitDistanceSquared(unit)`](#unitdistancesquaredunit)
@@ -1101,6 +1102,32 @@ This covers both `## SavedVariables` and `## SavedVariablesPerCharacter`.
 File-scope reads and writes both behave as they do on modern clients. A
 SavedVariables file exists only after the first save, so the first-ever
 login still sees `nil` — there is nothing on disk to load yet.
+
+### `/reload` picks up new addons and new files
+
+A stock 1.12 client fixes its view of the game folder at launch. A file
+you add while the game runs does not load until you restart the client.
+Only edits to files that already existed at launch take effect on
+`/reload`.
+
+ClassicAPI removes the restart requirement. On every `/reload`:
+
+- **A new folder under `Interface\AddOns\` loads as a normal addon.** It
+  appears in `GetNumAddOns()` / `GetAddOnInfo()`, fires `ADDON_LOADED`,
+  and its dependencies, SavedVariables, keybindings, and flavor TOC all
+  work as usual.
+- **New files added to an existing addon load** (add the file and its
+  TOC line, then `/reload`).
+- **A first-time SavedVariables file survives `/reload`.** On a stock
+  client, the first save of a newly installed addon is written to disk
+  but cannot be read back until a restart, so the settings appear lost.
+  That quirk is fixed.
+- **`##` metadata edits take effect.** Change any `##` line — for
+  example the `## SavedVariables:` or `## Dependencies:` list, the
+  `## Title:`, or the `## Interface:` version — and `/reload` applies
+  it. `GetAddOnMetadata` returns the new values.
+- **Deleting an addon folder removes it from the addon list** on the
+  next `/reload`.
 
 ## AuctionHouse
 
@@ -9146,18 +9173,23 @@ removed `setn` entirely; lengths are computed from the table itself.
 ClassicAPI gives you the 5.1 behavior — code written for Lua 5.1 (or
 that detects it) can skip `setn` and still get correct lengths.
 
-When the stored length points at a nil slot
+When the stored length points more than one slot past the last value,
 and the table has no explicit `n` field, `table.getn` — and everything
 built on it: `table.insert`, `table.remove`, `table.concat`,
 `table.sort`, `table.foreachi`, `unpack` — returns the true border, the
-same answer Lua 5.1 gives. Two things deliberately keep their old
+same answer Lua 5.1 gives. Three things deliberately keep their old
 behavior:
 
 - A table with an explicit numeric `n` field (the vararg `arg` contract)
   keeps its stored count, so trailing nils survive
   (`unpack({10, nil, 30, n = 3})` still returns all three slots).
+- A single trailing nil kept on purpose (`table.insert(t, nil)`) is a
+  valid empty slot, not a stale length. The stored length stays as it is,
+  so the next `table.insert` adds after the nil and does not write over it.
+  The heal starts only when the stored length is more than one slot too
+  large — the sign of a table that was cleared but not reset.
 - `table.setn` still works; the heal only changes the answer when the
-  stored length points past the last populated slot.
+  stored length points more than one slot past the last value.
 
 ### `Mixin(object, ...)` / `CreateFromMixins(...)`
 
@@ -11569,7 +11601,7 @@ indirected fields). Cast time is in milliseconds; ranges are floats in
 yards. `isFunnel` is a real boolean (`true`/`false`), matching 3.3.5's
 behavior. Returns `nil` if the spell ID is out of range.
 
-Two input forms are accepted:
+Four input forms are accepted, matching retail:
 
 - **`GetSpellInfo(spellID)`** — direct DBC lookup by ID.
 - **`GetSpellInfo(slot, bookType)`** — same shape as 1.12's
@@ -11577,6 +11609,20 @@ Two input forms are accepted:
   `"spell"` (player) or `"pet"`. The slot is resolved to a spellID via
   the engine's spellbook array, then the same DBC reads run. Returns
   `nil` for empty / out-of-range slots.
+- **`GetSpellInfo("name")`** — looks the name up in the player's, then
+  the pet's, spellbook and returns the highest rank you know. The match
+  is exact and case-sensitive. This is the retail scope: the name must
+  be a spell you have. A name you do not know returns `nil` (it does not
+  raise an error). It is not a database-wide search — a name shared by
+  many ranks or by NPC spells has no single answer, so only your own
+  spellbook is used.
+- **`GetSpellInfo("name(Rank N)")`** — a rank in parentheses pins that
+  exact rank instead of the highest, the same `SpellName(Rank N)` form
+  `CastSpellByName` accepts. A space before the parenthesis is allowed
+  (`"Mind Blast (Rank 8)"`). A rank you do not know returns `nil`.
+- **`GetSpellInfo("|Hspell:ID|h[Name]|h")`** — a spell hyperlink. The
+  `spellID` inside the link is used directly, so this works for any
+  spell, learned or not.
 
 ```lua
 local name, rank, icon, _, _, _, _, _, _, spellID = GetSpellInfo(133)
@@ -11585,7 +11631,15 @@ local name, rank, icon, _, _, _, _, _, _, spellID = GetSpellInfo(133)
 -- spellbook overload
 local _, _, _, _, _, _, _, _, _, id = GetSpellInfo(1, "spell")
 -- id is the spellID at player spellbook slot 1
+
+-- by name (highest rank you know), a specific rank, and a link
+local name = GetSpellInfo("Fireball")
+local _, rank = GetSpellInfo("Mind Blast (Rank 8)")  -- rank="Rank 8"
+local _, _, _, _, _, _, _, _, _, id = GetSpellInfo(GetSpellLink(133))
 ```
+
+The same name and link forms work for `GetSpellLink`, `IsPassiveSpell`,
+`IsHarmfulSpell`, and `IsHelpfulSpell`, which share this resolver.
 
 > **Note on the 10th return.** Modern WoW (5.0+) added the spellID as
 > the 14th return of its slimmer signature. We kept the existing 9
@@ -14822,6 +14876,26 @@ if owner == UnitGUID("player") then ... end  -- is it my minion?
 
 Reads the same owner field the pet predicates use (`CharmedBy`, else
 `CreatedBy` in the unit's `m_objectFields`).
+
+### `UnitCreatedBySpell(unit)`
+
+Returns the spell ID that summoned `unit`: the totem-drop spell for a totem,
+or the summon spell for a pet or guardian. Returns `nil` for an unresolved
+unit, and for a unit that no spell summoned (players and world creatures).
+
+This is the summoning spell, not a spell that the unit casts later. The spell
+that a totem casts stays on the server and never reaches the client. The
+client receives this value for every summoned unit, so it works for any unit
+in range, not only your own summons. Use `GetSpellInfo` to get a readable
+name.
+
+A ClassicAPI extension, not a stock WoW global.
+
+```lua
+UnitCreatedBySpell("pet")                -- your pet's summon spell id
+local id = UnitCreatedBySpell("target")  -- target a totem → its totem spell id
+if id then print(GetSpellInfo(id)) end   -- prints the name, like "Searing Totem"
+```
 
 ### `UnitStandState(unit)`
 

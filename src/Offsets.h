@@ -1095,6 +1095,19 @@ enum Offsets {
     OFF_UNIT_FIELD_CHARMEDBY = 0x10,
     OFF_UNIT_FIELD_CREATEDBY = 0x20,
 
+    // UNIT_CREATED_BY_SPELL — the spell that summoned this unit (descriptor
+    // byte +0x230, field index 0x8C). Set for every spell-summoned unit:
+    // totems (the shaman's totem-drop spell), pets, guardians, wild summons.
+    // Verified two ways: the unit-title builder `FUN_0052FD30` reads
+    // `[desc+0x230]` as the summoning spell (then switches on its Spell.dbc
+    // Effect[0] to pick "Guardian"/"Creation"), and the server stamps it
+    // with `m_spellInfo->Id` (tortoise-wow `EffectSummonTotem`/
+    // `EffectSummonGuardian`/`EffectSummon`). A broadcast field, so it's
+    // readable for any unit in range. `Unit::Pet` exposes it as
+    // `UnitCreatedBySpell`. NB: this is the SUMMONING spell — distinct from
+    // the spell a totem casts (that's server-side only, never broadcast).
+    OFF_UNIT_FIELD_CREATED_BY_SPELL = 0x230,
+
     // Pet-vs-minion discriminator for an owned unit: `int __fastcall(unit)`.
     // `0x00605570` is really the engine's **creature-type resolver** — it's
     // `Script_UnitCreatureType`'s (`0x0051A280`) inner helper and returns the
@@ -5448,8 +5461,12 @@ enum Offsets {
     //
     // `VAR_ADDON_LIST_CTRL` is just the address of the control struct
     // (i.e., `0x00BE1B64`). Pass `&VAR_ADDON_LIST_CTRL` as the `this`
-    // arg to `FUN_INTRUSIVE_LIST_INSERT`.
+    // arg to `FUN_INTRUSIVE_LIST_INSERT`. `VAR_ADDON_LIST_HEAD` is the
+    // control's +0x08 head slot; walk entries via
+    // `next = *(entry + [VAR_ADDON_LIST_CTRL] + 4)` (= `entry+0x10`),
+    // stopping on a low-bit-1 sentinel or NULL.
     VAR_ADDON_LIST_CTRL = 0x00BE1B64,
+    VAR_ADDON_LIST_HEAD = 0x00BE1B6C,
 
     // `SStrDup(const char *src, const char *file, int line)`. `__stdcall`.
     // Storm's string-copy wrapper around `SMemAlloc` — used by the engine
@@ -5720,6 +5737,178 @@ enum Offsets {
     VAR_ADDON_SECURITY_TABLE = 0x0085367C,
     VAR_ADDON_ARRAY = 0x00BE1B94,
     VAR_ADDON_COUNT = 0x00BE1B90,
+
+    // AddOnEntry fields shared by `Addons::Embedded` and `Addons::Rescan`
+    // (the full per-field derivation lives in CLAUDE.md's AddOn registry
+    // section):
+    //   +0x14 — canonical name pointer (what the load pass passes to the
+    //           by-name loader `FUN_0051F240`).
+    //   +0x29 — filter-out byte; the flat display-array builder skips
+    //           entries where it's non-zero (how `!!!ClassicAPI` hides).
+    //   LoadWith desc@+0x58 (count@+0x5C, data@+0x60) — `## LoadWith:`
+    //           names, parsed by `FUN_TOC_PARSER` (append site writes
+    //           rec[0x16..0x19]).
+    //   reverse-LoadWith desc@+0x88 (count@+0x8C, data@+0x90,
+    //           quantum@+0x94) — `AddOnEntry *`s of every addon that
+    //           declared `## LoadWith: <this>`; built by the scan
+    //           `FUN_0051C760`'s tail loop (rec[0x22..0x25]), consumed by
+    //           the loader's post-ADDON_LOADED loop.
+    OFF_ADDON_ENTRY_NAME_PTR = 0x14,
+    OFF_ADDON_ENTRY_FILTER_OUT = 0x29,
+    OFF_ADDON_LOADWITH_COUNT = 0x5C,
+    OFF_ADDON_LOADWITH_ARRAY = 0x60,
+    OFF_ADDON_REVLOADWITH_DESC = 0x88,
+
+    // `## Secure:` flag byte. Parser write site verified in
+    // `FUN_TOC_PARSER`'s decompile (`*(bool *)(entry_dwords + 10)` =
+    // `+0x28`); also set by the SMSG_ADDON_INFO secure path at login.
+    // Entries with this set are SMSG-managed (Blizzard addons on stock
+    // clients) — never evict/re-register them: the parser cannot restore
+    // packet-delivered state (and their MPQ TOCs never change anyway).
+    OFF_ADDON_ENTRY_SECURE = 0x28,
+
+    // Complete single-`AddOnEntry` destructor — vtable slot 0 of the
+    // registry's node factory (`[0x00BE1B60]` = `&PTR_FUN_00808c7c`,
+    // installed by the boot init `FUN_0051C360`; the login teardown
+    // `FUN_0051FA40` dispatches per entry through it).
+    // `__stdcall(AddOnEntry *)`, RET 4 (arg read from `[EBP+8]`,
+    // verified by disassembly). Body (`FUN_005200A0` → field cleanup
+    // `FUN_005200D0`, both decompiled):
+    //   - frees EVERY owned allocation: name (+0x14), the +0x30 string,
+    //     all five dep/SV string arrays AND their buffers
+    //     (+0x38/+0x48/+0x58/+0x68/+0x78), the reverse-LoadWith buffer
+    //     (+0x88), and the per-entry `##` metadata hash table (+0x98 —
+    //     the Title/Notes/Author/X-* nodes `GetAddOnMetadata` reads);
+    //   - SELF-UNLINKS from both registry structures: the intrusive
+    //     list (link node +0xC via `FUN_00520A60`, which neighbor-
+    //     patches from the node alone and no-ops when already unlinked)
+    //     and the hash bucket chain (+0x4);
+    //   - frees the entry struct itself (`__AUUIADDON__` tag).
+    // What it does NOT clean: THIS entry's pointer inside OTHER
+    // entries' reverse-LoadWith lists — the caller must scrub those
+    // first (`Addons::Rescan`), or the loader's post-ADDON_LOADED loop
+    // (`FUN_0051F240` tail: reads +0x8C/+0x90, derefs each entry's
+    // +0x14) reads freed memory.
+    FUN_ADDON_ENTRY_DESTROY = 0x005200A0,
+
+    // `u8` set to 1 by `FUN_ADDON_INIT` after the login scan completes,
+    // cleared by the registry teardown `FUN_0051FA40`. Gates anything
+    // that touches the registry outside the login path.
+    VAR_ADDON_INITIALIZED = 0x00BE1C08,
+
+    // ── The frozen loose-file index (why new files need a restart) ────
+    //
+    // Every relative-path file open resolves through `FUN_00647E60`,
+    // which consults a HASH TABLE OF LOOSE FILES built ONCE per process:
+    // `FUN_00646EA0` (lazy, latched by `VAR_VFS_INDEX_READY`) walks the
+    // whole game directory tree via `FUN_VFS_INDEX_SUBTREE`, keying each
+    // file by its base-relative path and storing the joined on-disk path.
+    // Index hits open the mapped path LIVE from disk (edits to existing
+    // files take effect on /reload); index misses fall through to the
+    // MPQ search ONLY — the archive layer's live disk probe
+    // (`FUN_00654DD0` → GetFileAttributesA) is dead code at runtime
+    // because its enable global `DAT_00865B44` (ships as 1 in the image)
+    // is unconditionally cleared by early boot (`FUN_00402210` →
+    // `FUN_00648C20`). File WRITES (`FUN_0042A460` = raw CreateFileW)
+    // never register in the index either. Net effect on a stock client:
+    // any file created after boot — a new addon's TOC, a new .lua in an
+    // existing addon, even a freshly written SavedVariables file — is
+    // INVISIBLE to every relative-path read until the client restarts.
+    //
+    // `FUN_VFS_INDEX_SUBTREE` — the recursive indexer itself:
+    //   void __fastcall IndexSubtree(
+    //       const char *basePath,   // ecx — index keys are relative to
+    //                               //       this (the game dir)
+    //       const char *relSubdir,  // edx — subtree below basePath; ""
+    //                               //       for the boot-time full walk
+    //       void       *findHandle);// stack — from FUN_VFS_FIND_OPEN on
+    //                               //       join(basePath, relSubdir)
+    //   Dedup-safe: every insert is preceded by a hash lookup, so
+    //   re-running it on a subtree registers only genuinely new files —
+    //   which is exactly what `Addons::Rescan` does per /reload for
+    //   `Interface\AddOns` and `WTF\Account`.
+    //
+    // `FUN_VFS_FIND_OPEN` — `__stdcall(const char *dirPath) -> void*`
+    //   (RET 4). Allocates a find block, strips trailing backslashes,
+    //   requires the path to be an EXISTING DIRECTORY
+    //   (GetFileAttributes & 0x10) — returns NULL otherwise — then arms
+    //   it with "\*". Release with `FUN_VFS_FIND_CLOSE`
+    //   (`__stdcall(void*)`, RET 4; NULL-safe).
+    //
+    // `VAR_VFS_BASE_PATH` — the game base dir recorded at boot
+    //   (`FUN_006488B0`); `FUN_00646EA0` uses it as the walk base when
+    //   `FUN_VFS_FIND_OPEN` accepts it, else falls back to ".".
+    // `VAR_VFS_INDEX_READY` — `u8` latch; nonzero once the boot walk ran.
+    FUN_VFS_INDEX_SUBTREE = 0x00646910,
+    FUN_VFS_FIND_OPEN = 0x006674A0,
+    FUN_VFS_FIND_CLOSE = 0x006676A0,
+    VAR_VFS_BASE_PATH = 0x00C52418,
+    VAR_VFS_INDEX_READY = 0x00C5251C,
+
+    // ── Login scan walk #2 (loose-addon discovery) — replayed per /reload
+    //
+    // `FUN_ADDON_SCAN_DISK_DIRS` — generic disk directory walker
+    // (resolves to kernel32 FindFirstFileW; the DISK sibling of
+    // `FUN_MPQ_ENUM_FILES`):
+    //   int __fastcall ScanDiskDirs(
+    //       const char *basePath,    // ecx — e.g. "Interface\AddOns\"
+    //       const char *pattern,     // edx — appended to basePath; the
+    //                                //       scan passes the "*" at
+    //                                //       VAR_ADDON_SCAN_PATTERN
+    //       Callback    cb,          // stack — see below
+    //       void       *userParam,   // stack — passed to cb in edx
+    //       int         includeHidden); // stack — 0 skips hidden files
+    //   RET 0xC. Callback: `int __fastcall(FindInfo * /*ecx*/,
+    //   void *userParam /*edx*/)` with FindInfo `{+0x4 attrs (0x10 =
+    //   directory), +0x8 char name[]}`; returning nonzero STOPS the walk
+    //   (note: OPPOSITE of `FUN_MPQ_ENUM_FILES`' convention).
+    //
+    // `FUN_ADDON_DISK_DIR_CB` — the engine's own per-entry callback for
+    // this walk (defined + verified in Ghidra): for every directory not
+    // starting with '.', calls `FUN_TOC_PARSER` on the name; returns 0.
+    // `Addons::Rescan` replays the scan's exact call —
+    // `ScanDiskDirs(VAR_ADDON_PATH_PREFIX, VAR_ADDON_SCAN_PATTERN,
+    // FUN_ADDON_DISK_DIR_CB, 0, 0)` — so new-folder discovery is 100%
+    // engine code; the parser's dedup guard makes it a no-op per
+    // already-registered addon.
+    FUN_ADDON_SCAN_DISK_DIRS = 0x0042AD10,
+    FUN_ADDON_DISK_DIR_CB = 0x0051D7B0,
+    VAR_ADDON_SCAN_PATTERN = 0x00833180,  // "*" (walker config block)
+    VAR_ADDON_PATH_PREFIX = 0x00853724,   // "Interface\AddOns\"
+
+    // ── Flat display array + descriptor grow helpers ──────────────────
+    //
+    // The `GetNumAddOns`/`GetAddOnInfo(i)` array (`VAR_ADDON_ARRAY` /
+    // `VAR_ADDON_COUNT` above) is a full `{cap, count, data, quantum}`
+    // descriptor at `VAR_ADDON_ARRAY_CAP` (cap@0x00BE1B8C,
+    // count@0x00BE1B90, data@0x00BE1B94, quantum@0x00BE1B98) holding
+    // NAME POINTERS (entry+0x14), rebuilt from scratch and qsorted by
+    // `FUN_0051DA70` phase 2 whenever SMSG_ADDON_INFO lands.
+    // `Addons::Rescan` mirrors that phase (never calls `FUN_0051DA70`
+    // itself — its phase 1 consumes the packet) so newly appended
+    // registry entries show up in the by-index Lua surface.
+    //
+    // Grow helpers (one template instantiation per desc — use each at
+    // its verified site): `__thiscall(desc /*ecx*/, uint newCap)`,
+    // RET 4 — Storm-reallocs `desc->data` to newCap*4 and writes
+    // `desc->cap = newCap`.
+    //   FUN_ADDON_ARRAY_GROW      — flat display array (used by
+    //                               `FUN_0051DA70` phase 2)
+    //   FUN_ADDON_REVLOADWITH_GROW — reverse-LoadWith descs (used by the
+    //                               scan tail loop)
+    // `FUN_DESC_QUANTUM_CALC` — `__thiscall(desc /*ecx*/, uint needed)`,
+    //   RET 4: returns the append-rounding quantum (highest power of two
+    //   ≤ needed, min 1; ≥ 0x40 caps at 0x40 and stores desc->quantum).
+    // `FUN_CRT_QSORT` — the CRT `qsort` (`__cdecl(base, num, width,
+    //   cmp)`); `FUN_ADDON_NAME_COMPARE` is the engine's `__cdecl`
+    //   name-pointer comparator `FUN_0051DA70` sorts the array with.
+    VAR_ADDON_ARRAY_CAP = 0x00BE1B8C,
+    VAR_ADDON_ARRAY_QUANTUM = 0x00BE1B98,
+    FUN_ADDON_ARRAY_GROW = 0x004755F0,
+    FUN_ADDON_REVLOADWITH_GROW = 0x005213C0,
+    FUN_DESC_QUANTUM_CALC = 0x00521C50,
+    FUN_CRT_QSORT = 0x0073F727,
+    FUN_ADDON_NAME_COMPARE = 0x0051DEB0,
 
     // NOTE: an earlier revision defined OFF_PLAYER_FIELD_VIS_BYTES /
     // PLAYER_VIS_BIT_STEALTH here at 0x17C, believing bit 0x02 was a

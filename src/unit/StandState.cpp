@@ -20,8 +20,6 @@ namespace Unit::StandState {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // `UnitStandState(unit)` — returns the unit's current standstate as
 // the integer encoded in the low byte of `UNIT_BYTES_1`
 // (descriptor + 0x210):
@@ -55,8 +53,7 @@ int __fastcall Script_UnitStandState(void *L) {
         return 1;
     }
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *unit = static_cast<const uint8_t *>(resolve(token));
+    auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
     if (unit == nullptr) {
         Game::Lua::PushNumber(L, 0);
         return 1;

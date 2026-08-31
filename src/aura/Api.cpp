@@ -46,14 +46,10 @@ namespace Aura::Api {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 const uint8_t *ResolveUnit(const char *token) {
     if (token == nullptr)
         return nullptr;
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(
-        static_cast<uintptr_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN));
-    return static_cast<const uint8_t *>(fn(token));
+    return static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
 }
 
 // Resolves a token to its GUID for the out-of-range (no live CGUnit) path.

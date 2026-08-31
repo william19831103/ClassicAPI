@@ -768,6 +768,168 @@ void RegisterDurationModLua() {
 
 const Game::ModuleAutoRegister _autoregDurationMod{&RegisterDurationModLua};
 
+// ---- Tick-speed compression (Turtle: Dark Harvest) -------------------------
+//
+// A channel that accelerates the caster's periodic auras on its target
+// consumes them FASTER on the live server: each dot keeps its tick count, so
+// ticking pct% faster drains its real remaining time at (100+pct)% rate while
+// the trigger aura is up, and it falls off early by pct% of the overlap — with
+// no client-visible aura change whatsoever. (tortoise-wow's recreation only
+// re-times the tick timers and leaves holder duration alone, which does NOT
+// reproduce the observed early fall-off; the compression model here matches
+// Cursive's community calibration — `remaining -= 0.30 × overlap` — and the
+// reported ~2.4–3 s loss over a full 8 s Dark Harvest.)
+//
+// The math is anchored, not incremental: each compressed entry remembers the
+// expiration it had when compression began and is set to
+// `anchor − elapsed × pct/100` every tick, so frame pacing can't drift it. An
+// external write to the entry (dot recast → SpellGo re-stamp, a duration mod)
+// is detected by comparing against the last value WE wrote and re-anchors from
+// the fresh expiration — matching the server, where a recast dot is a new
+// holder that compresses from its own full duration.
+struct TickCompression {
+    uint32_t triggerFamily;
+    uint64_t triggerMask;
+    uint32_t affectedFamily;
+    uint64_t affectedMask;
+    int32_t pct;
+};
+constexpr int kCompressionMax = 4;
+TickCompression g_compressions[kCompressionMax];
+int g_compressionCount = 0;
+
+// Live per-entry compression state, keyed the way the cache identifies an
+// aura instance — (target, spell, caster) — so two warlocks' same-spell dots
+// on one target compress independently. `lastWrittenMs` is the expiration this
+// module wrote last tick — a mismatch means someone else re-stamped the entry.
+struct CompressState {
+    uint64_t targetGuid;
+    uint64_t casterGuid;
+    uint32_t spellId;
+    uint32_t startMs;      // compression (re-)anchor time
+    uint32_t anchorMs;     // entry expiration at the anchor
+    uint32_t lastWrittenMs;
+    uint32_t lastSignalMs; // event-consumer nudge cadence (~1/s)
+    bool touched;          // trigger still live this tick
+    bool used;
+};
+constexpr int kCompressStateMax = 16;
+CompressState g_compressStates[kCompressStateMax];
+
+CompressState *FindOrClaimCompressState(uint64_t targetGuid,
+                                        uint64_t casterGuid,
+                                        uint32_t spellId) {
+    CompressState *spare = nullptr;
+    for (auto &s : g_compressStates) {
+        if (s.used && s.targetGuid == targetGuid &&
+            s.casterGuid == casterGuid && s.spellId == spellId)
+            return &s;
+        if (!s.used && spare == nullptr)
+            spare = &s;
+    }
+    return spare; // unused slot for the caller to claim; nullptr = table full
+}
+
+// The server's affected-aura test is on the RUNTIME aura type (PERIODIC_DAMAGE
+// / PERIODIC_LEECH), which the record mirrors as EffectApplyAuraName 3 / 53 on
+// some effect. Load-bearing beyond the family mask: Turtle's Atrocity (45904)
+// shares Corruption's 0x2 bit but is a proc-trigger aura (42) — the mask alone
+// would compress it, this gate excludes it exactly as the server's does.
+// (Drain Soul passes via its effect-2 periodic damage: aura=[86,3,0].)
+bool HasPeriodicDamageOrLeech(const uint8_t *rec) {
+    if (rec == nullptr)
+        return false;
+    constexpr int32_t kPeriodicDamage = 3, kPeriodicLeech = 53;
+    for (int i = 0; i < 3; ++i) {
+        const int32_t aura = *reinterpret_cast<const int32_t *>(
+            rec + Offsets::OFF_SPELL_RECORD_EFFECT_APPLY_AURA_NAME + i * 4);
+        if (aura == kPeriodicDamage || aura == kPeriodicLeech)
+            return true;
+    }
+    return false;
+}
+
+// Compression pairs by CASTER, mirroring the server (each warlock's Dark
+// Harvest accelerates that warlock's own dots): the trigger entry's caster
+// must own the affected entry too. Another warlock's DH + dots are both
+// broadcast SPELL_GO, so their timing compresses for us as well; caster-less
+// entries (application seen, cast unobserved) can't be paired and stay
+// untouched, same as every other caster-strict mechanic here.
+void CompressTarget(const TickCompression &c, uint64_t targetGuid,
+                    uint64_t casterGuid, uint32_t now) {
+    for (int i = 0; i < g_usedHigh; ++i) {
+        Entry &e = g_cache[i];
+        if (!e.used || e.targetGuid != targetGuid ||
+            e.casterGuid != casterGuid || e.expirationMs == 0)
+            continue;
+        const uint8_t *rec =
+            Spell::Lookup::RecordForID(static_cast<int>(e.spellId));
+        if (!AffectedMatchesRaw(rec, c.affectedFamily, c.affectedMask,
+                                /*icon*/ 0) ||
+            !HasPeriodicDamageOrLeech(rec))
+            continue;
+        CompressState *s =
+            FindOrClaimCompressState(e.targetGuid, e.casterGuid, e.spellId);
+        if (s == nullptr)
+            continue;
+        if (!s->used) {
+            *s = {e.targetGuid, e.casterGuid, e.spellId,     now,
+                  e.expirationMs, e.expirationMs, 0, false, true};
+        } else if (e.expirationMs != s->lastWrittenMs) {
+            s->startMs = now; // externally re-stamped — restart from fresh
+            s->anchorMs = e.expirationMs;
+        }
+        s->touched = true;
+        const uint32_t cut = static_cast<uint32_t>(
+            static_cast<uint64_t>(now - s->startMs) *
+            static_cast<uint32_t>(c.pct) / 100);
+        e.expirationMs = s->anchorMs - cut;
+        s->lastWrittenMs = e.expirationMs;
+        // Event-driven consumers (aura bars that read once and count down
+        // locally) need periodic nudges to re-read the moving expiration;
+        // pollers pick it up on their own. First write nudges immediately.
+        if (s->lastSignalMs == 0 || now - s->lastSignalMs >= 1000) {
+            s->lastSignalMs = now;
+            SignalAuraChanged(e.targetGuid);
+        }
+    }
+}
+
+void ApplyTickCompressions(uint32_t now) {
+    if (g_compressionCount == 0)
+        return;
+    for (auto &s : g_compressStates)
+        s.touched = false;
+    for (int r = 0; r < g_compressionCount; ++r) {
+        const TickCompression &c = g_compressions[r];
+        for (int i = 0; i < g_usedHigh; ++i) {
+            const Entry &t = g_cache[i];
+            if (!t.used || t.casterGuid == 0)
+                continue;
+            // The trigger aura is live exactly while its entry is: unexpired
+            // (channel pushback already folded in via RestampPlayerChannel)
+            // and not yet evicted by OnAuraRemoved (interrupt / early end /
+            // target death).
+            if (t.expirationMs != 0 &&
+                Time::Clock::Reached(now, t.expirationMs))
+                continue;
+            if (!Spell::Lookup::IsFitToFamily(
+                    Spell::Lookup::RecordForID(static_cast<int>(t.spellId)),
+                    c.triggerFamily, c.triggerMask))
+                continue;
+            CompressTarget(c, t.targetGuid, t.casterGuid, now);
+        }
+    }
+    // Trigger gone → the entry keeps whatever expiration it drained to; one
+    // last nudge publishes the final position to event-driven consumers.
+    for (auto &s : g_compressStates) {
+        if (s.used && !s.touched) {
+            SignalAuraChanged(s.targetGuid);
+            s.used = false;
+        }
+    }
+}
+
 // Wipe the whole cache. Used on a map transition (see OnWorldTick).
 void FlushAll() {
     for (int i = 0; i < g_usedHigh; ++i)
@@ -776,6 +938,9 @@ void FlushAll() {
     // Reset transition baselines too: post-transition group auras re-sync and
     // should be treated as first-sight (unknown age), not diffed as new.
     for (auto &s : g_groupSnaps)
+        s.used = false;
+    // Compressed entries are gone with the cache; their states go too.
+    for (auto &s : g_compressStates)
         s.used = false;
 }
 
@@ -808,6 +973,9 @@ void OnWorldTick() {
     }
 
     const uint32_t now = NowMs();
+    // Tick-speed compression first, so a drained expiration is visible to the
+    // same tick's eviction sweep and signal flush.
+    ApplyTickCompressions(now);
     for (int i = 0; i < g_usedHigh; ++i) {
         Entry &e = g_cache[i];
         if (!e.used || e.expirationMs == 0 || !Time::Clock::Reached(now, e.expirationMs))
@@ -1441,6 +1609,28 @@ bool AddTriggeredApplicationByFamily(uint32_t triggerFamily,
                                         durationPct);
 }
 
+bool AddTickCompression(uint32_t triggerFamily, uint64_t triggerMask,
+                        uint32_t affectedFamily, uint64_t affectedMask,
+                        int32_t pct) {
+    if (triggerFamily == 0 || triggerMask == 0 || affectedMask == 0 ||
+        pct <= 0 || pct > 100)
+        return false;
+    for (int i = 0; i < g_compressionCount; ++i) { // replace an identical rule
+        TickCompression &r = g_compressions[i];
+        if (r.triggerFamily == triggerFamily && r.triggerMask == triggerMask &&
+            r.affectedFamily == affectedFamily &&
+            r.affectedMask == affectedMask) {
+            r.pct = pct;
+            return true;
+        }
+    }
+    if (g_compressionCount >= kCompressionMax)
+        return false;
+    g_compressions[g_compressionCount++] = {triggerFamily, triggerMask,
+                                            affectedFamily, affectedMask, pct};
+    return true;
+}
+
 int RefreshJudgements(uint64_t unitGuid, uint64_t attackerGuid) {
     // Caster-strict (no adoption) — the Judgement-cast path inside
     // HandleSpellGo is the one with proof of ownership; see
@@ -1480,6 +1670,25 @@ uint32_t RefreshDurationByFamily(uint64_t unitGuid, uint32_t family,
         return e.spellId;
     }
     return 0;
+}
+
+void RestampPlayerChannel(uint32_t spellId, uint32_t remainingMs) {
+    if (spellId == 0 || remainingMs == 0)
+        return;
+    const uint64_t player = Unit::Identity::PlayerGuid();
+    if (player == 0)
+        return;
+    const uint32_t now = NowMs();
+    // Every hit target's entry, matching DelaySpellAuraHolder's loop over the
+    // channel's m_UniqueTargetInfo (an AoE channel shortens them all).
+    for (int i = 0; i < g_usedHigh; ++i) {
+        Entry &e = g_cache[i];
+        if (!e.used || e.casterGuid != player || e.spellId != spellId)
+            continue;
+        e.expirationMs = now + remainingMs;
+        e.stampMs = now;
+        SignalAuraChanged(e.targetGuid);
+    }
 }
 
 void EvictAbsent(uint64_t unitGuid, const uint32_t *slotSpellIds) {

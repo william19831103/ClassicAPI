@@ -105,7 +105,6 @@ using ClntObjMgrEnumVisibleObjectsCallback_t = int(__fastcall *)(void *ctx,
                                                                   uint64_t guid);
 using ClntObjMgrEnumVisibleObjects_t =
     int(__fastcall *)(ClntObjMgrEnumVisibleObjectsCallback_t cb, void *ctx);
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using LootUnit_t = void(__thiscall *)(void *player, void *target,
                                       char useDistanceCheck);
 using CloseLootInner_t = void(__fastcall *)(int sendRelease,
@@ -443,9 +442,7 @@ bool BeginWalk(bool lootMode, size_t maxCount) {
         return false;
     if (*reinterpret_cast<void *volatile *>(Offsets::VAR_LOCAL_PLAYER_PTR) == nullptr)
         return false;
-    auto Resolve = reinterpret_cast<ResolveUnitToken_t>(
-        Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    void *player = Resolve("player");
+    void *player = Game::ResolveUnitToken("player");
     if (player == nullptr)
         return false;
 

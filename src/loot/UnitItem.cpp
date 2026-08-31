@@ -39,7 +39,6 @@ enum class State {
     WaitingOpen,
 };
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using LootUnit_t = void(__thiscall *)(void *player, void *target,
                                       char useDistanceCheck);
 // `FUN_005E1AD0` is `__stdcall(uint8_t)`, not `__fastcall` — the
@@ -164,9 +163,7 @@ int __fastcall Script_LootUnitItem(void *L) {
         return 1;
     }
 
-    auto Resolve = reinterpret_cast<ResolveUnitToken_t>(
-        Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    void *player = Resolve("player");
+    void *player = Game::ResolveUnitToken("player");
     if (player == nullptr) {
         Game::Lua::PushBool(L, false);
         return 1;

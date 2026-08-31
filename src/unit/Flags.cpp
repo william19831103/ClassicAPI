@@ -44,8 +44,6 @@ bool IsPlayerObject(const uint8_t *unit) {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // Reads a PLAYER_FLAGS bit for a player. Path:
 //   - Resolve unit; gate on the object actually being a player
 //     (`OBJECT_TYPE_PLAYER`) so we never read the +0xE68 CGPlayer
@@ -72,8 +70,7 @@ bool TestPlayerFlag(void *L, uint32_t flagMask) {
     if (token == nullptr)
         return false;
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *unit = static_cast<const uint8_t *>(resolve(token));
+    auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
     // PLAYER_FLAGS lives in the CGPlayer sub-struct — gate on the object
     // actually being a player, not merely player-controlled (pets/totems
     // set that flag but have no sub-struct → garbage +0xE68 deref).
@@ -123,8 +120,7 @@ int __fastcall Script_UnitIsFeignDeath(void *L) {
         return 1;
     }
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *unit = static_cast<const uint8_t *>(resolve(token));
+    auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
     if (unit == nullptr) {
         Game::Lua::PushBoolean(L, 0);
         return 1;
@@ -265,9 +261,8 @@ int __fastcall Script_UnitIsInMyGuild(void *L) {
         return 1;
     }
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
     const uint32_t playerKey = ReadGuildKey(
-        static_cast<const uint8_t *>(resolve("player")));
+        static_cast<const uint8_t *>(Game::ResolveUnitToken("player")));
     if (playerKey == 0) {
         // Player isn't in a guild — nobody is.
         Game::Lua::PushNil(L);
@@ -357,8 +352,7 @@ int __fastcall Script_UnitIsPossessed(void *L) {
         return 1;
     }
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *unit = static_cast<const uint8_t *>(resolve(token));
+    auto *unit = static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
     if (unit == nullptr) {
         Game::Lua::PushBoolean(L, 0);
         return 1;

@@ -56,7 +56,6 @@ namespace Unit::Pet {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 // `int __fastcall(unit)` → 1 for a controllable pet, non-1 otherwise.
 // The engine's pet-vs-minion title discriminator. See
 // FUN_UNIT_PET_MINION_CLASS.
@@ -68,16 +67,14 @@ const uint8_t *ResolveUnit(void *L) {
     const char *token = Game::Lua::ToString(L, 1);
     if (token == nullptr)
         return nullptr;
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    return static_cast<const uint8_t *>(resolve(token));
+    return static_cast<const uint8_t *>(Game::ResolveUnitToken(token));
 }
 
 // The unit's owner/controller GUID: CharmedBy, else CreatedBy (the two
 // fields the engine itself uses for ownership). 0 for players, world
 // creatures, and anything unowned.
 uint64_t OwnerGuid(const uint8_t *unit) {
-    auto *desc = *reinterpret_cast<const uint8_t *const *>(
-        unit + Offsets::OFF_UNIT_DESCRIPTOR);
+    auto *desc = Game::Read<const uint8_t *>(unit, Offsets::OFF_UNIT_DESCRIPTOR);
     if (desc == nullptr)
         return 0;
     const int owners[] = {
@@ -85,11 +82,22 @@ uint64_t OwnerGuid(const uint8_t *unit) {
         Offsets::OFF_UNIT_FIELD_CREATEDBY,
     };
     for (int off : owners) {
-        const uint64_t g = *reinterpret_cast<const uint64_t *>(desc + off);
+        const uint64_t g = Game::Read<uint64_t>(desc, off);
         if (g != 0)
             return g;
     }
     return 0;
+}
+
+// The spell that summoned this unit (its UNIT_CREATED_BY_SPELL descriptor
+// field): the totem-drop spell for a totem, the summon spell for a
+// pet/guardian, etc. 0 for a unit not summoned by a spell (players, world
+// creatures) or an object with no descriptor.
+uint32_t CreatedBySpell(const uint8_t *unit) {
+    auto *desc = Game::Read<const uint8_t *>(unit, Offsets::OFF_UNIT_DESCRIPTOR);
+    if (desc == nullptr)
+        return 0;
+    return Game::Read<uint32_t>(desc, Offsets::OFF_UNIT_FIELD_CREATED_BY_SPELL);
 }
 
 // `UnitIsMinion(unit)` — true iff the unit is a player's minion (pet,
@@ -184,6 +192,31 @@ int __fastcall Script_UnitOwnerGUID(void *L) {
     return 1;
 }
 
+// `UnitCreatedBySpell(unit)` — the spell ID that summoned this unit, read
+// from its UNIT_CREATED_BY_SPELL field: the shaman totem-drop spell for a
+// totem, the summon spell for a pet/guardian, and so on. This is the same
+// field the engine's unit-title builder consults to pick the
+// "Pet"/"Minion"/"Guardian"/"Creation" title. It is a broadcast descriptor
+// field, so it works for any unit in range, not just your own summons.
+// Returns nil for an unresolved unit and for anything not summoned by a
+// spell (players, world creatures). Note this is the *summoning* spell —
+// the spell a totem casts is server-side only and never reaches the client.
+// A ClassicAPI extension — not a stock WoW global.
+int __fastcall Script_UnitCreatedBySpell(void *L) {
+    const uint8_t *unit = ResolveUnit(L);
+    if (unit == nullptr) {
+        Game::Lua::PushNil(L);
+        return 1;
+    }
+    const uint32_t spellId = CreatedBySpell(unit);
+    if (spellId == 0) {
+        Game::Lua::PushNil(L);
+        return 1;
+    }
+    Game::Lua::PushNumber(L, static_cast<double>(spellId));
+    return 1;
+}
+
 } // namespace
 
 static void RegisterLuaFunctions() {
@@ -192,6 +225,8 @@ static void RegisterLuaFunctions() {
     Game::Lua::RegisterGlobalFunction("UnitIsOtherPlayersPet",
                                       &Script_UnitIsOtherPlayersPet);
     Game::Lua::RegisterGlobalFunction("UnitOwnerGUID", &Script_UnitOwnerGUID);
+    Game::Lua::RegisterGlobalFunction("UnitCreatedBySpell",
+                                      &Script_UnitCreatedBySpell);
 }
 
 static const Game::ModuleAutoRegister _autoreg{&RegisterLuaFunctions};

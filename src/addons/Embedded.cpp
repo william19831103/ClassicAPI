@@ -50,6 +50,7 @@
 #include "addons/EngineIO.h"
 #include "addons/FlavorBindings.h"
 #include "addons/FlavorToc.h"
+#include "addons/Registry.h"
 #include "addons/Toc.h"
 #include "addons/TocRewrite.h"
 #include "bindings/Inject.h"
@@ -377,26 +378,22 @@ using ListInsert_t = void(__thiscall *)(void *listCtrl, void *entry,
 // engine's own insert helper handles remove-then-insert atomically,
 // so it's safe to call on an entry that's already in the list.
 //
-// Entries are pointed to by `[VAR_ADDON_LIST_HEAD]` (`0x00BE1B6C`),
-// with the next-pointer field at `entry + 0x10` (computed as
-// `*(value-at-VAR_ADDON_LIST_CTRL) + entry + 4` = `0xC + entry + 4`
-// = `entry + 0x10`). Low-bit-1 means "sentinel" (end of list).
-// Name pointer lives at `entry + 0x14`.
-constexpr uintptr_t VAR_ADDON_LIST_HEAD = 0x00BE1B6C;
-constexpr int OFF_ADDON_ENTRY_NAME_PTR = 0x14;
-
-// `entry+0x29` — the "filter-out" byte. The flat display-array builder
-// `FUN_0051da70` walks the linked list and copies an entry into
-// `GetNumAddOns`/`GetAddOnInfo`'s array ONLY when this byte is 0, so
-// setting it hides `!!!ClassicAPI` from the character-select AddOns
-// list — there's no checkbox, so it can't be toggled off. The builder
-// only ever *writes* this byte on the secure/SMSG path (`entry+0x28 !=
-// 0`); our entry is non-secure, so a manual `1` here is stable across
-// rebuilds. Hiding does NOT stop loading (the load pass `FUN_0051f600`
-// never reads `+0x29`) and does NOT break dependency resolution or
-// by-name queries (those use the addon hash table, which keeps the
-// entry regardless).
-constexpr int OFF_ADDON_ENTRY_FILTER_OUT = 0x29;
+// The list is walked via the shared `Addons::ForEachEntry`
+// (`addons/Registry.h`); the callback stops the walk once it finds and
+// re-links our entry, since the re-link invalidates the current
+// next-pointer.
+//
+// `entry + OFF_ADDON_ENTRY_FILTER_OUT` is the "filter-out" byte. The
+// flat display-array builder `FUN_0051da70` walks the linked list and
+// copies an entry into `GetNumAddOns`/`GetAddOnInfo`'s array ONLY when
+// this byte is 0, so setting it hides `!!!ClassicAPI` from the
+// character-select AddOns list — there's no checkbox, so it can't be
+// toggled off. The builder only ever *writes* this byte on the
+// secure/SMSG path (`entry+0x28 != 0`); our entry is non-secure, so a
+// manual `1` here is stable across rebuilds. Hiding does NOT stop
+// loading (the load pass `FUN_0051f600` never reads `+0x29`) and does
+// NOT break dependency resolution or by-name queries (those use the
+// addon hash table, which keeps the entry regardless).
 
 // `entry+0x2b` — DefaultState (`## DefaultState: enabled/disabled`).
 // The enable resolver `FUN_ADDON_ENABLE_RESOLVE` falls back to this
@@ -411,29 +408,26 @@ constexpr int OFF_ADDON_ENTRY_DEFAULT_STATE = 0x2b;
 // with the `FUN_ADDON_ENABLE_RESOLVE` co-hook, `!!!ClassicAPI` always
 // loads and never appears as a toggleable entry.
 void FinalizeEmbeddedEntry() {
-    uintptr_t entry = *reinterpret_cast<uintptr_t *>(VAR_ADDON_LIST_HEAD);
-    const int linkOffset = *reinterpret_cast<const int *>(
-        static_cast<uintptr_t>(Offsets::VAR_ADDON_LIST_CTRL));
-    while ((entry & 1) == 0 && entry != 0) {
+    Addons::ForEachEntry([](uintptr_t entry) -> bool {
         const char *name = *reinterpret_cast<const char *const *>(
-            entry + OFF_ADDON_ENTRY_NAME_PTR);
-        if (name != nullptr && std::strcmp(name, kAddonName) == 0) {
-            // Hide from the character-select AddOns list and default it
-            // to enabled.
-            *reinterpret_cast<uint8_t *>(entry + OFF_ADDON_ENTRY_FILTER_OUT) = 1;
-            *reinterpret_cast<uint8_t *>(entry + OFF_ADDON_ENTRY_DEFAULT_STATE) = 1;
+            entry + Offsets::OFF_ADDON_ENTRY_NAME_PTR);
+        if (name == nullptr || std::strcmp(name, kAddonName) != 0)
+            return true; // keep walking
 
-            auto fn = reinterpret_cast<ListInsert_t>(
-                Offsets::FUN_INTRUSIVE_LIST_INSERT);
-            fn(reinterpret_cast<void *>(
-                   static_cast<uintptr_t>(Offsets::VAR_ADDON_LIST_CTRL)),
-               reinterpret_cast<void *>(entry),
-               /*position=*/ 1, /*anchor=*/ 0);
-            return;
-        }
-        entry = *reinterpret_cast<const uintptr_t *>(
-            entry + linkOffset + 4);
-    }
+        // Hide from the character-select AddOns list and default it to
+        // enabled, then move it to the head of the load order.
+        *reinterpret_cast<uint8_t *>(
+            entry + Offsets::OFF_ADDON_ENTRY_FILTER_OUT) = 1;
+        *reinterpret_cast<uint8_t *>(entry + OFF_ADDON_ENTRY_DEFAULT_STATE) = 1;
+
+        auto fn = reinterpret_cast<ListInsert_t>(
+            Offsets::FUN_INTRUSIVE_LIST_INSERT);
+        fn(reinterpret_cast<void *>(
+               static_cast<uintptr_t>(Offsets::VAR_ADDON_LIST_CTRL)),
+           reinterpret_cast<void *>(entry),
+           /*position=*/ 1, /*anchor=*/ 0);
+        return false; // stop — the re-link invalidated our next-pointer
+    });
 }
 
 void __fastcall AddonInit_h(const char *accountName) {

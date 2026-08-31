@@ -51,6 +51,15 @@ int SpellbookSlotToID(int slot1Based, int bookType);
 // in either book.
 int FindSpellbookSlot(int spellID, int *outBookType);
 
+// Resolves a spell NAME to a spellID against the player's (then pet's)
+// spellbook — the same scope retail's `GetSpellInfo(name)` uses. The
+// match is exact and case-sensitive against the current locale's name
+// field (matching retail and ShaguTweaks' `libspell`). When a spell has
+// several ranks in the book, the highest rank is returned (the spellbook
+// arrays list a spell's ranks in ascending order, so the last match
+// wins). Returns 0 for a null/empty name or one the player doesn't know.
+int SpellNameToID(const char *name);
+
 // Resolves a 0-based UI slot into the recipe's spellID. Used by both
 // tradeskill and craft scrapers — they share the same storage shape:
 // `[entriesVar]` is a pointer to a heap-allocated array of recipe-

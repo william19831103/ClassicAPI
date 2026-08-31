@@ -22,15 +22,12 @@ namespace Spell::Level {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
-
 // Reads the local player's descriptor — same pattern as
 // Unit::Combat::Script_InCombatLockdown. Returns nullptr at login
 // screen / character select / loading transition where the
 // CGPlayer doesn't exist yet.
 const uint8_t *PlayerDescriptor() {
-    auto fn = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<const uint8_t *>(fn("player"));
+    auto *player = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
     if (player == nullptr)
         return nullptr;
     return Game::Read<const uint8_t *>(

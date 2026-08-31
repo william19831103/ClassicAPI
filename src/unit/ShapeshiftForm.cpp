@@ -23,7 +23,6 @@ namespace Unit::ShapeshiftForm {
 
 namespace {
 
-using ResolveUnitToken_t = void *(__fastcall *)(const char *token);
 using CancelAuraSend_t = void(__fastcall *)(int spellID);
 
 // Read the local player's current shapeshift form byte. Returns
@@ -32,8 +31,7 @@ using CancelAuraSend_t = void(__fastcall *)(int spellID);
 // can tell "transient unresolved" from "left a form" and not fire
 // a bogus change event during early-login windows.
 int ReadCurrentForm() {
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<const uint8_t *>(resolve("player"));
+    auto *player = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
     if (player == nullptr)
         return -1;
     auto *fields = *reinterpret_cast<const uint8_t *const *>(
@@ -101,8 +99,7 @@ int __fastcall Script_CancelShapeshiftForm(void *L) {
     if (form <= 0)
         return 0;
 
-    auto resolve = reinterpret_cast<ResolveUnitToken_t>(Offsets::FUN_RESOLVE_UNIT_TOKEN);
-    auto *player = static_cast<const uint8_t *>(resolve("player"));
+    auto *player = static_cast<const uint8_t *>(Game::ResolveUnitToken("player"));
     if (player == nullptr)
         return 0;
 
