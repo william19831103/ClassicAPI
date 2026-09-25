@@ -175,6 +175,8 @@ build instructions.
   - [`MODIFIER_STATE_CHANGED` event](#modifier_state_changed-event)
   - [`NAME_PLATE_CREATED` / `NAME_PLATE_UNIT_ADDED` / `NAME_PLATE_UNIT_REMOVED` events](#name_plate_created--name_plate_unit_added--name_plate_unit_removed-events)
   - [`PLAYER_FOCUS_CHANGED` event](#player_focus_changed-event)
+  - [`PLAYER_SWING` event](#player_swing-event)
+  - [`PLAYER_SWING_RANGE_UPDATE` event](#player_swing_range_update-event)
   - [`QUEST_ACCEPTED` event](#quest_accepted-event)
   - [`QUEST_REMOVED` event](#quest_removed-event)
   - [`QUEST_TURNED_IN` event](#quest_turned_in-event)
@@ -183,6 +185,7 @@ build instructions.
   - [`UPDATE_MOUSEOVER_UNIT` event (loss-fire fix)](#update_mouseover_unit-event-loss-fire-fix)
   - [`UPDATE_SHAPESHIFT_FORM` event](#update_shapeshift_form-event)
   - [`UNIT_SPELLCAST_*` events](#unit_spellcast_-events)
+  - [`WEAPON_SLOT_CHANGED` event](#weapon_slot_changed-event)
 
 - [Expansion](#expansion)
   - [`GetClassicExpansionLevel()`](#getclassicexpansionlevel)
@@ -265,6 +268,7 @@ build instructions.
   - [`RegisterUnitWatch` / `UnregisterUnitWatch` / `UnitWatchRegistered`](#registerunitwatch--unregisterunitwatch--unitwatchregistered)
   - [`SecureButton_GetAttribute` / `SecureButton_GetUnit`](#securebutton_getattribute--securebutton_getunit)
   - [`PreClick` / `PostClick` button scripts](#preclick--postclick-button-scripts)
+  - [`Button:RegisterForClicks("AnyUp" | "AnyDown" | ...)`](#buttonregisterforclicksanyup--anydown--)
   - [`GetClickFrame(name)`](#getclickframename)
 
 - [FriendList](#friendlist)
@@ -315,6 +319,7 @@ build instructions.
   - [`Enum.InventoryType`](#enuminventorytype)
   - [`Enum.ItemClass`](#enumitemclass)
   - [`Enum.ItemQuality`](#enumitemquality)
+  - [`Enum.PlayerSwingType`](#enumplayerswingtype)
   - [`Enum.PowerType`](#enumpowertype)
   - [`Enum.SpellBookSpellBank`](#enumspellbookspellbank)
   - [`Enum.SpellBookItemType`](#enumspellbookitemtype)
@@ -430,6 +435,7 @@ build instructions.
 - [LossOfControl](#lossofcontrol)
   - [`C_LossOfControl.GetActiveLossOfControlDataCount()`](#c_lossofcontrolgetactivelossofcontroldatacount)
   - [`C_LossOfControl.GetActiveLossOfControlData(index)`](#c_lossofcontrolgetactivelossofcontroldataindex)
+  - [`C_LossOfControl.GetSchoolLockout([filterMask])`](#c_lossofcontrolgetschoollockoutfiltermask)
 
 - [Lua](#lua)
   - [Lua 5.1 syntax](#lua-51-syntax)
@@ -666,6 +672,10 @@ build instructions.
   - [`GetShapeshiftFormID()`](#getshapeshiftformid)
   - [`CancelShapeshiftForm()`](#cancelshapeshiftform)
   - [`GetSheathState()`](#getsheathstate)
+
+- [SwingTimer](#swingtimer)
+  - [`C_SwingTimer.EnableRangeCheck(swingType, enable)`](#c_swingtimerenablerangecheckswingtype-enable)
+  - [`C_SwingTimer.IsTargetWithinSwingRange(swingType)`](#c_swingtimeristargetwithinswingrangeswingtype)
 
 - [System](#system)
   - [`GetPhysicalScreenSize()`](#getphysicalscreensize)
@@ -4277,6 +4287,59 @@ end)
 (no event refires). Fired whenever the player's focus target is
 changed, including when the focus target is lost or cleared.
 
+### `PLAYER_SWING` event
+
+Fires each time one of your attack timers resets.
+
+```
+PLAYER_SWING: swingDuration, swingType
+```
+
+- **`swingDuration`** (number) — the number of seconds from now until
+  the next swing of this type.
+- **`swingType`** — an
+  [`Enum.PlayerSwingType`](#enumplayerswingtype) value: which weapon
+  reset.
+
+```lua
+local f = CreateFrame("Frame")
+f:RegisterEvent("PLAYER_SWING")
+f:SetScript("OnEvent", function()
+    if arg2 == Enum.PlayerSwingType.MainHand then
+        MainHandBar_Start(arg1)
+    end
+end)
+```
+
+A landed main-hand or off-hand hit resets that weapon's timer. An
+on-next-swing ability (Heroic Strike, Maul) resets the main-hand timer
+in its place. A ranged shot resets the ranged timer. Several melee hits
+can land at the same moment, such as an extra attack from Windfury.
+Even then, this event fires once per weapon, not once per hit. A
+parried hit can shorten `swingDuration` below the weapon's normal
+speed. Which spells interrupt the melee timers can differ by realm.
+
+`PLAYER_SWING` does not fire for an attack that you declare while out
+of melee range. It fires once a swing is close enough to be real.
+
+### `PLAYER_SWING_RANGE_UPDATE` event
+
+Fires when your current target moves into or out of range for a swing
+type that has range checking on. See
+[`C_SwingTimer.EnableRangeCheck`](#c_swingtimerenablerangecheckswingtype-enable).
+
+```
+PLAYER_SWING_RANGE_UPDATE: swingType, isInRange, checksRange
+```
+
+- **`swingType`** — the [`Enum.PlayerSwingType`](#enumplayerswingtype)
+  value this update is for.
+- **`isInRange`** — `1` when the target is in range, `nil` when it is
+  not. Ignore this value when `checksRange` is `nil`.
+- **`checksRange`** — `1` when a range check was possible, `nil` when
+  it was not: for example, there is no current target, the target
+  cannot be attacked, or no weapon is equipped for this swing type.
+
 ### `QUEST_ACCEPTED` event
 
 Fires once per quest the player just accepted, with two payload args:
@@ -4684,6 +4747,32 @@ end)
 > these `UNIT_`-prefixed events sit on top. The empowered-cast events
 > (`UNIT_SPELLCAST_EMPOWER_*`) are not implemented — there are no empowered
 > casts here.
+
+### `WEAPON_SLOT_CHANGED` event
+
+Fires (with no payload) when the item in a weapon slot changes: main
+hand (16), off hand (17), or ranged (18). Equip, unequip, and swap all
+fire it.
+
+Slot 18 holds relics (Libram, Idol, Totem) for Paladins, Shamans, and
+Druids. A relic is not a weapon, so the event does not fire for one.
+`UnitHasRelicSlot("player")` reports which kind of slot 18 the player
+has.
+
+Use this instead of `PLAYER_EQUIPMENT_CHANGED` when only the weapons
+matter — a swing-timer bar, or any code that re-reads
+`UnitAttackSpeed` and `UnitRangedDamage`.
+
+The event collapses to one fire per frame. A single action that changes
+two weapon slots fires the event one time, not two.
+
+```lua
+local f = CreateFrame("Frame")
+f:RegisterEvent("WEAPON_SLOT_CHANGED")
+f:SetScript("OnEvent", function()
+    SwingBars_ReadWeapons()
+end)
+```
 
 ## Expansion
 
@@ -6229,7 +6318,7 @@ SecureCmdOptionParse("[nocombat] rest")      -- "rest" out of combat, else nil
 | `stance` / `stance:N` | you are shapeshifted / in bar form N (`form` is the same) |
 | `stealth` / `mounted` / `swimming` / `indoors` / `outdoors` | player state |
 | `mod` / `mod:shift` / `mod:ctrl` / `mod:alt` | a modifier key is held (`modifier` is the same) |
-| `button:N` | the current button is N (defaults to the left button; `btn` is the same) |
+| `button:N` | the click running now used button N — 1 left, 2 right, 3 middle, 4, 5 (`btn` is the same) |
 | `bar:N` / `actionbar:N` | the current action bar page is N |
 | `bonusbar` / `bonusbar:N` | a bonus bar is active / bonus bar N is active |
 | `pet` / `pet:name` | you have a pet / a pet with that name or family |
@@ -6249,6 +6338,15 @@ not.
 The `[stance:N]` number is the shapeshift bar slot, not the form ID that
 [`GetShapeshiftFormID()`](#getshapeshiftformid) returns. On a druid, bar slot 1
 is Bear and slot 3 is Cat.
+
+`[button:N]` reads the button of the click the macro is running inside, the
+same value [`GetMouseButtonClicked()`](#getmousebuttonclicked) returns. You can
+give a button name in place of the number: `[button:rightbutton]` and
+`[button:2]` are the same test, and names are not case-sensitive.
+
+When no click is running, `[button:N]` answers as if the left button were used.
+That is the case for a state driver poll and for the re-evaluation behind a
+macro's `#showtooltip` icon, neither of which comes from a click.
 
 `known` is a ClassicAPI extension, not a Blizzard conditional. A numeric
 argument uses [`IsPlayerSpell`](#isplayerspellspellid), so it matches any known
@@ -6328,19 +6426,28 @@ for addon compatibility.
 
 ### `PreClick` / `PostClick` button scripts
 
-Two button scripts that run immediately before and after `OnClick`. They are
+Two button scripts that run immediately before and after a click. They are
 real scripts: set them with `SetScript`, read them with `GetScript`, and hook
 them with `HookScript`.
 
-One click runs the three handlers in this order:
+One click runs the handlers in this order:
 
 ```
 PreClick  ->  OnClick  ->  PostClick
 ```
 
+`PreClick` and `PostClick` fire on every click. The button does not need an
+`OnClick` handler.
+
 Each handler gets `arg1` — the mouse button name (`"LeftButton"`,
 `"RightButton"`, …) — the same value `OnClick` gets. With positional
 arguments on (the default), the handler signature is `function(self, button)`.
+
+A `CheckButton` changes its checked state before `PreClick` runs, so
+`GetChecked()` inside `PreClick` already returns the new state.
+
+A double-click runs `OnDoubleClick` only. It does not run `PreClick` or
+`PostClick`.
 
 ```lua
 local btn = CreateFrame("Button", "MyButton", UIParent)
@@ -6349,9 +6456,29 @@ btn:SetScript("OnClick",   function() print("the click") end)
 btn:SetScript("PostClick", function(self, button) print("after the click:", button) end)
 ```
 
-**The button must also have an `OnClick` handler.** `PreClick` and `PostClick`
-fire around `OnClick`. A button with no `OnClick` set fires neither. This serves
-the normal use: run code just before or after a button's click action.
+### `Button:RegisterForClicks("AnyUp" | "AnyDown" | ...)`
+
+`RegisterForClicks` accepts two collective names:
+
+- `"AnyUp"` — the button responds to the release of every mouse button.
+- `"AnyDown"` — the button responds to the press of every mouse button.
+
+`"AnyUp"` stands for the five `*Up` names and `"AnyDown"` for the five
+`*Down` names. You can mix them with the explicit names.
+
+```lua
+btn:RegisterForClicks("AnyUp")
+btn:RegisterForClicks("AnyDown", "LeftButtonUp")
+```
+
+The explicit names are `LeftButtonUp`, `LeftButtonDown`, `RightButtonUp`,
+`RightButtonDown`, `MiddleButtonUp`, `MiddleButtonDown`, `Button4Up`,
+`Button4Down`, `Button5Up`, and `Button5Down`. Names are not case-sensitive.
+
+A name that is not in this list counts as no click type. A call with only
+unknown names makes the button respond to no click at all. `Button:Click()`
+ignores the click types, so a button in that state still responds to
+`Click()`.
 
 ### `GetClickFrame(name)`
 
@@ -7567,6 +7694,17 @@ no such items exist here.
 if select(3, GetItemInfo(id)) == Enum.ItemQuality.Epic then ...
 ```
 
+### `Enum.PlayerSwingType`
+
+The weapon that a [`PLAYER_SWING`](#player_swing-event) or
+[`C_SwingTimer`](#swingtimer) value applies to:
+
+| Value | Field      | Meaning |
+|------:|------------|---------|
+| `0`   | `MainHand` | The main-hand melee weapon. |
+| `1`   | `OffHand`  | The off-hand melee weapon, when one is equipped. |
+| `2`   | `Ranged`   | The ranged weapon: a bow, gun, crossbow, or wand. |
+
 ### `Enum.PowerType`
 
 The integer enum `UnitPowerType` returns and `UnitPower` /
@@ -7915,9 +8053,10 @@ end
 
 ### `GetMouseButtonClicked()`
 
-Returns the name of the mouse button that started the `OnClick` or
-`OnDoubleClick` handler that is now running. At any other time it
-returns `nil`.
+Returns the name of the mouse button that started the handler that is
+now running. It works inside these handlers, on any frame:
+`OnMouseDown`, `OnMouseUp`, `PreClick`, `OnClick`, `PostClick`, and
+`OnDoubleClick`. At any other time it returns `nil`.
 
 A helper function that the handler calls can also read the name.
 `arg1` is not in scope there.
@@ -7927,14 +8066,11 @@ The name is one of `"LeftButton"`, `"MiddleButton"`, `"RightButton"`,
 gives `"LeftButton"`. A `Button:Click(name)` call with any other name
 gives `"UNKNOWN"`.
 
-`PreClick` and `PostClick` handlers run inside the click, so they read
-the same name.
+`OnDragStart` is not in the list above. In `OnDragStart` this function
+returns `nil`, and `arg1` holds the button.
 
-The other mouse scripts are not clicks. In `OnMouseDown`, `OnMouseUp`,
-and `OnDragStart` this function returns `nil`, and `arg1` holds the
-button.
-
-The name is valid only while the handler runs. If a handler clicks a
+The name is valid only while the handler runs. A held mouse button does
+not keep it set. If a handler clicks a
 second button, the name of that inner click applies until the inner
 handler ends. Then the outer name comes back.
 
@@ -10468,8 +10604,49 @@ Fidelity notes:
   `Aura::Source` cache) and are `nil` otherwise. These fields are nullable.
 - **`auraInstanceID`** is omitted (`nil`) — no equivalent here.
 
+### `C_LossOfControl.GetSchoolLockout([filterMask])`
+
+Returns `lockedMask, secondsRemaining` for the school-interrupt lockout — the
+`SCHOOL_INTERRUPT` slice of the list above, without building the list.
+
+```lua
+local mask, remaining = C_LossOfControl.GetSchoolLockout()
+if mask ~= 0 then
+    print(C_Spell.GetSchoolString(mask), "locked for", remaining)
+end
+
+-- One school's own remaining time. Masks are 1 << schoolIndex:
+-- physical 1, holy 2, fire 4, nature 8, frost 16, shadow 32, arcane 64.
+local locked, fireRemaining = C_LossOfControl.GetSchoolLockout(4)
+if locked ~= 0 and fireRemaining < 0.5 then
+    -- fire clears within half a second
+end
+```
+
+| Return | Type | Notes |
+|---|---|---|
+| `lockedMask` | number | Every currently locked school OR'd together, as `1 << schoolIndex` — the same shape as `lockoutSchool`. `0` when nothing is locked. |
+| `secondsRemaining` | number? | Until every school in `lockedMask` is clear, i.e. the lockout ending last. `nil` when `lockedMask` is `0`. |
+
+`filterMask` narrows the scan to those schools, so one school's own remaining
+time is `GetSchoolLockout(1 << schoolIndex)`. Omitted or `0` means all schools.
+
+Two schools can be locked at the same time — each `SMSG_SPELL_COOLDOWN` batch
+locks one, so being kicked on fire and then on frost leaves both active. That is
+why this returns a mask rather than a single school, and why walking the list
+above and stopping at the first `SCHOOL_INTERRUPT` entry is wrong.
+
+Prefer this over the list walk whenever only the school lockout matters: it
+reads the lockout state directly, allocating no table and skipping the
+debuff scan that every `GetActiveLossOfControlData` call performs. Cheap enough
+to call per frame from a macro conditional.
+
 The `LOSS_OF_CONTROL_ADDED` / `LOSS_OF_CONTROL_UPDATE` events fire as these
 effects change — see [Events](#loss_of_control_added--loss_of_control_update-events).
+Note that they are driven by a diff of *which* effects are active, so
+re-locking an already-locked school extends its lockout without firing either
+event. Read the remaining time when you need it rather than caching it on the
+events.
 
 For the effect that blocks one specific spell, shaped as a cooldown, see
 [`C_Spell.GetSpellLossOfControlCooldown`](#c_spellgetspelllossofcontrolcooldownspellidentifier)
@@ -10795,7 +10972,7 @@ explicit `n` field, `table.getn` — and everything built on it:
 `table.foreachi`, `unpack` — returns the true border, the same answer
 Lua 5.1 gives. This includes a table that is stale by exactly one slot
 (a one-element table that was cleared, or a recycled table whose
-previous use was one slot longer). Three things deliberately keep their
+previous use was one slot longer). Four things deliberately keep their
 old behavior:
 
 - A table with an explicit numeric `n` field (the vararg `arg` contract)
@@ -10807,6 +10984,10 @@ old behavior:
   after the nil rather than writing over it. This is the Lua 5.0
   behavior that Ace2-era argument builders depend on. Only the two-arg
   append form is remembered; `table.insert(t, pos, nil)` is not.
+- A table with weak values (`__mode = "v"` or `"kv"`) keeps its stored
+  length. The garbage collector clears those slots when nothing else
+  holds the value, so a nil slot does not show that the length is
+  stale. Table-recycling pools depend on this.
 - `table.setn` still works; the heal only changes the answer when the
   stored length points past the last value and the nil was not put
   there by `table.insert`.
@@ -11629,21 +11810,20 @@ GetMacroItemIcons(itemList)
 -- itemList now has `INV_*` basenames.
 ```
 
-The split is `loose` (icons the user dropped into `Interface\Icons\`
-on disk) vs `mpq` (icons baked into the game's MPQ archives), crossed
-with `Spell` (basenames starting with `Ability_` / `Spell_`) vs
-`Item` (basenames starting with `INV_`). We hook
-the engine's three scan callbacks
-(`FUN_MACRO_ICON_CB_DISK` / `*_USER_MPQ` / `*_INSTALL_MPQ`) and tag
-each captured filename by source + prefix.
+The split is `loose` (icons you dropped into `Interface\Icons\` on
+disk) vs `mpq` (icons that ship inside the game's MPQ archives),
+crossed with `Spell` (basenames that start with `Ability_` or
+`Spell_`) vs `Item` (basenames that start with `INV_`).
 
-**Quirk worth noting**: the engine's main icon DB (what
-`GetMacroIconInfo(i)` returns) is filtered down to `Ability_*` /
-`Spell_*` only — `INV_*` filenames flow through the scan callbacks
-(~2,500+ per session in the Octo client) but never land in the DB
-because something downstream of the callbacks rejects them. We
-capture before that rejection, so `GetMacroItemIcons` works even
-though no engine-level `GetMacroItemIconInfo(i)` exists.
+**Quirk worth noting**: `GetMacroIconInfo(i)` lists only the
+`Ability_*` and `Spell_*` icons. The archives hold thousands of
+`INV_*` icons that it never shows. These four functions do return
+them, so `GetMacroItemIcons` gives you the item icons that
+`GetMacroIconInfo` cannot reach.
+
+An `INV_*` file that you put in `Interface\Icons\` yourself is
+different: `GetMacroIconInfo` does list it, after a restart of the
+client.
 
 Each appended entry is the uppercase basename stripped of the
 `Interface\Icons\` prefix and any `.blp`/`.tga` extension (e.g.
@@ -16354,6 +16534,42 @@ The engine has `ToggleSheath()` but no matching getter. `GetSheathState`
 adds the query, with 1-based values. To change the state, use the
 built-in `ToggleSheath()`.
 
+## SwingTimer
+
+`C_SwingTimer` reports whether your current target is in range for a
+melee or ranged auto-attack. See
+[`PLAYER_SWING`](#player_swing-event) for the matching attack-timer
+event, and [`Enum.PlayerSwingType`](#enumplayerswingtype) for the
+weapon values both use.
+
+### `C_SwingTimer.EnableRangeCheck(swingType, enable)`
+
+Turns [`PLAYER_SWING_RANGE_UPDATE`](#player_swing_range_update-event)
+on or off for one swing type.
+
+```lua
+C_SwingTimer.EnableRangeCheck(Enum.PlayerSwingType.MainHand, true)
+```
+
+After you enable a swing type, call
+[`C_SwingTimer.IsTargetWithinSwingRange`](#c_swingtimeristargetwithinswingrangeswingtype)
+once to read the current range. The event fires only on a later change.
+
+### `C_SwingTimer.IsTargetWithinSwingRange(swingType)`
+
+Returns whether your current target is in range for a swing type
+(an [`Enum.PlayerSwingType`](#enumplayerswingtype) value).
+
+```lua
+local inRange = C_SwingTimer.IsTargetWithinSwingRange(Enum.PlayerSwingType.MainHand)
+```
+
+Returns `nil` when no range answer is possible. Reasons include no
+current target, an unattackable target, or no weapon equipped for that
+swing type. A `nil` value must not be read as out of range.
+Auto-attacks apply only to the current target, so no other unit can be
+queried.
+
 ## System
 
 Host/OS-level helpers that aren't tied to a game domain.
@@ -18351,12 +18567,10 @@ tokens (`"HELPFUL"`, `"HARMFUL"`,
 
 - **`HELPFUL`** (default) / **`HARMFUL`** — pick buffs or debuffs by each
   aura's polarity flag. In `GetUnitAuras`, supplying neither returns both.
-- **`PLAYER`** — restrict to auras the local player cast, via the
-  `Aura::Source` caster cache (`sourceGUID == ` player GUID). Combines with
-  the range tokens (`"HARMFUL|PLAYER"` = your debuffs only). Because the
-  caster is best-effort, an aura whose cast we didn't observe is treated as
-  not-player-cast and excluded — so `PLAYER` can under-report auras that
-  predate login.
+- **`PLAYER`** — restrict to auras that the player or the player's pet
+  cast. Combines with the range tokens (`"HARMFUL|PLAYER"` = your debuffs
+  only). The caster is known only for casts seen this session, so an aura
+  that predates login counts as not-player-cast and is excluded.
 
 Other tokens (`RAID` / `CANCELABLE` / `INCLUDE_NAME_PLATE_ONLY`) are
 accepted but no-op — they need engine systems (raid-dispel relevance,
@@ -18459,10 +18673,10 @@ leading `!`. This build honors:
 - `HELPFUL` / `HARMFUL` — buffs / debuffs, by each aura's polarity flag
   rather than its slot number. With neither token the query returns both
   (the indexed getter defaults to helpful).
-- `PLAYER` / `!PLAYER` — only auras the local player cast, or only
-  auras the player did not cast. Caster data comes from casts this
-  session, so an aura present before you saw it cast has no caster and
-  counts as not-player.
+- `PLAYER` / `!PLAYER` — only auras the player or the player's pet cast,
+  or only the auras neither of them cast. Caster data comes from casts
+  this session, so an aura present before you saw it cast has no caster
+  and counts as not-player.
 - `DISPELLABLE` / `!DISPELLABLE` — only auras that can be dispelled,
   purged, or stolen (dispel type Magic, Curse, Disease, or Poison), or
   only auras that cannot. This is "can it be removed at all", not "can

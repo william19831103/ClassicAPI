@@ -261,17 +261,93 @@ enum Offsets {
     // `Frame::ClickEvents` co-hooks this to hand out an external per-button cell
     // for those two names — same technique as FUN_GAMETOOLTIP_SCRIPT_RESOLVER.
     FUN_BUTTON_SCRIPT_RESOLVER = 0x00778C50,
-    // Button OnClick / OnDoubleClick script slot offsets (the resolver's
-    // returns for those two names). Used by `Frame::ClickEvents` to recognize a
-    // click fire at the runner hook below: the fire passes slotPtr == button +
-    // one of these. Each has exactly one fire site — the click vmethods
-    // FUN_00779540 (OnClick) and FUN_00779650 (OnDoubleClick), which take a
-    // button BITMASK (1 = Left, 2 = Middle, 4 = Right, 8 = Button4,
-    // 0x10 = Button5), map it through a jump table to the engine's own name
-    // literal (anything else -> "UNKNOWN" at 0x00838044) and fire
-    // FUN_007026F0(button, button + slot, "%s", name).
+    // Button OnClick / OnDoubleClick script slot offsets (the Button resolver's
+    // returns for those two names; each an 8-byte {handler ref, exec context}).
+    // `Frame::ClickEvents` matches a fire at the runner hook below against
+    // slotPtr == button + one of these to scope GetMouseButtonClicked.
     OFF_BUTTON_ONCLICK_HANDLER = 0x4CC,
     OFF_BUTTON_ONDOUBLECLICK_HANDLER = 0x4D4,
+    // CSimpleFrame script slots — the base-frame resolver FUN_0076A0D0's returns
+    // (it chains to CScriptObject FUN_00702590 first, OnEvent @ +0xC). Derived as
+    // one table, recorded as one: OnLoad +0x118, OnSizeChanged +0x120, OnUpdate
+    // +0x128, OnShow +0x130, OnHide +0x138, OnEnter +0x140, OnLeave +0x148,
+    // OnMouseDown +0x150, OnMouseUp +0x158, OnMouseWheel +0x160, OnDragStart
+    // +0x168, OnDragStop +0x170, OnReceiveDrag +0x178, OnChar +0x180, OnKeyDown
+    // +0x188, OnKeyUp +0x190. Only the two mouse-button slots are named:
+    // `Frame::ClickEvents` scopes GetMouseButtonClicked around their fires —
+    // the exact set 3.3.5's frame manager brackets (its CSimpleFrame::OnMouseDown
+    // FUN_0048fc30 and OnMouseUp FUN_0048fce0 write [frameMgr+0x1234]; its
+    // OnDragStart does not; confirmed live on 3.3.5, 2026-09-15). The dispatches
+    // are FUN_0076BF70 (mouse-down: records the drag candidate at +0xFC..+0x110,
+    // then fires) and FUN_0076C040 (mouse-up: dispatches OnDragStop/OnReceiveDrag
+    // instead when a drag was pending), each via FUN_FRAME_RUN_SCRIPT_VARIADIC
+    // (frame, frame + slot, "%s", name).
+    OFF_FRAME_ONMOUSEDOWN_SLOT = 0x150,
+    OFF_FRAME_ONMOUSEUP_SLOT = 0x158,
+    // Button::Click vmethod (Button vtable 0x0081C7F8 + 0x94) — __thiscall(button,
+    // buttonMask, fromScript), RET 8. Gate [+0x328] != 0 (enabled); runs the
+    // internal C++ click listener at +0x314 (vtable+0x10; set by FUN_00779740,
+    // never Lua-visible); iff [+0x4CC] is set, maps the mask through a jump
+    // table (targets @0x007795F4, index bytes @0x0077960C) to the engine's name
+    // literal and fires FUN_FRAME_RUN_SCRIPT_VARIADIC(button, button+0x4CC,
+    // "%s", name). Mask: 1 Left, 2 Middle, 4 Right, 8 Button4, 0x10 Button5,
+    // anything else "UNKNOWN". `fromScript` is 1 from Script_Click
+    // (FUN_007826C0 — folds its optional string to a mask: no arg -> 1,
+    // unrecognized or empty -> 0 -> "UNKNOWN") and 0 from both input handlers
+    // (mouse-down FUN_00779210 fires it for *Down registrations, mouse-up
+    // FUN_007792D0 for *Up, routing to +0x98 DoubleClick instead when [+0x4D4]
+    // is set and the previous click was <= 300 ms ago); the base ignores it.
+    // Every Lua-creatable button reaches this function: Button holds it in its
+    // vtable, CheckButton's override FUN_00785550 toggles +0x4DC then calls it;
+    // the nameplate button FUN_007CB910 and the game-UI button FUN_004C1820
+    // chain to it too. Only the hyperlink button FUN_007A3510 (vtable
+    // 0x0081D5B0) does not — it forwards to its owner's OnHyperlinkClick and
+    // never fires OnClick. `Frame::ClickEvents` co-hooks it to bracket EVERY
+    // click with PreClick/PostClick and the GetMouseButtonClicked scope, with
+    // or without an OnClick handler — the 3.3.5 shape (CSimpleButton::Click
+    // FUN_0096fd70 -> FUN_0096f090 fires PreClick, OnClick, PostClick as three
+    // independent `if (slot)` blocks).
+    //
+    // An earlier note here said SuperWoW inline-hooks this prologue and that a
+    // second MinHook faults (ERROR #132) — the reason PreClick/PostClick were
+    // first implemented at the runner and needed an OnClick handler to fire. A
+    // literal scan (2026-09-15) of every DLL the client loads — SuperWoWhook,
+    // nampower, perf_boost, pngscreenshots, regfix, transmogfix, UnitXP_SP3,
+    // VanillaHelpers, VanillaMultiMonitorFix, AuctionQueryThrottle,
+    // VanillaLooseLoader, VanillaMinimapTracking — finds NO reference to this
+    // address (absolute or RVA), while SuperWoWhook's real targets
+    // (SetEventCount, RebuildEventTable, SignalEventParam, ClearCastingSpell)
+    // all appear as plain literals, so the method would have found it. The #132
+    // sighting was real; this function was not its trigger. Prologue
+    // 55 8B EC 83 EC 14 56 8B CE — no relative branch in the first 6 bytes,
+    // internal jumps all target >= 0x7795B1: MinHook-safe.
+    FUN_BUTTON_CLICK = 0x00779540,
+    // Button::DoubleClick (vtable +0x98, shared by all five button-family
+    // vtables) — same shape, fires +0x4D4. NOT hooked: 3.3.5 fires no
+    // PreClick/PostClick around a double-click (FUN_0096f150 fires only
+    // OnDoubleClick), and its GetMouseButtonClicked scope comes from the runner
+    // gate on OFF_BUTTON_ONDOUBLECLICK_HANDLER. Reference only.
+    FUN_BUTTON_DOUBLECLICK = 0x00779650,
+    // Variadic front of the runner below — __cdecl(frame, slotPtr, fmt, ...),
+    // forwards &va as vaPtr to FUN_FRAME_RUN_SCRIPT_WITH_CONTEXT. The entry
+    // every input-script fire in the engine uses (25 call sites, byte-scanned).
+    // `Frame::ClickEvents` fires PreClick/PostClick through it so they take the
+    // identical path to the engine's own OnClick fire.
+    FUN_FRAME_RUN_SCRIPT_VARIADIC = 0x007026F0,
+    // The engine's "%s" format literal — the fmt every mouse-button script fire
+    // passes (OnClick, OnDoubleClick, OnMouseDown, OnMouseUp, OnDragStart) and
+    // the per-token unit-event broadcast uses. Passed by pointer so our fires
+    // are byte-identical to the engine's.
+    VAR_SCRIPT_FMT_S = 0x0082E280,
+    // The engine's button-name literals, exactly as FUN_BUTTON_CLICK's jump
+    // table selects them — so a PreClick/PostClick arg1 built from these is
+    // pointer-identical to the arg1 the engine hands OnClick.
+    VAR_BUTTON_NAME_LEFT = 0x00878864,    // "LeftButton"    mask 0x01
+    VAR_BUTTON_NAME_MIDDLE = 0x00878854,  // "MiddleButton"  mask 0x02
+    VAR_BUTTON_NAME_RIGHT = 0x00878848,   // "RightButton"   mask 0x04
+    VAR_BUTTON_NAME_4 = 0x00878840,       // "Button4"       mask 0x08
+    VAR_BUTTON_NAME_5 = 0x00878838,       // "Button5"       mask 0x10
+    VAR_BUTTON_NAME_UNKNOWN = 0x00838044, // "UNKNOWN"       any other mask
     // Frame-script runner WITH exec-context stamping — __cdecl(void *frame,
     // int *slotPtr, const char *fmt, void *vaPtr). Saves DAT_00ceeac0, stamps
     // it from slotPtr[1] (the cell's context), then calls FUN_FRAME_RUN_SCRIPT_ARGS
@@ -280,16 +356,16 @@ enum Offsets {
     // forwarder); the event dispatcher FUN_00703F50 is the only other caller.
     // ONE hook, owned by `Frame::RunnerHook`, fans out to subscribers that each
     // claim a disjoint slot address (a second MinHook here would abort the
-    // whole install — subscribe instead): `Frame::ClickEvents` gates on
-    // `slotPtr == frame + OFF_BUTTON_ONCLICK_HANDLER` (an exact OnClick match —
-    // no other fire passes that slot) and brackets OnClick with PreClick /
-    // PostClick by re-invoking with the same (fmt, vaPtr) so the button-name
-    // arg is reused; `Frame::UnitEvent` gates on `slotPtr == frame +
-    // OFF_FRAME_ONEVENT_SLOT` (the dispatcher's per-frame OnEvent fire) and
-    // suppresses the call when a RegisterUnitEvent filter rejects arg1.
-    // Deliberately NOT the button click vmethod FUN_00779540, which SuperWoW
-    // inline-hooks for click-casting (a second hook there faults, ERROR #132 —
-    // see the note near FUN_SCRIPT_FRAME_GET_STRATA); this runner is uncontested.
+    // whole install — subscribe instead): `Frame::ClickEvents` gates on the
+    // four mouse-button script slots (OnClick/OnDoubleClick on buttons,
+    // OnMouseDown/OnMouseUp on every frame) and scopes GetMouseButtonClicked
+    // around the fire — the runner is where the engine hands over the button
+    // NAME, so it is the scope point by design; `Frame::UnitEvent` gates on
+    // `slotPtr == frame + OFF_FRAME_ONEVENT_SLOT` (the dispatcher's per-frame
+    // OnEvent fire) and suppresses the call when a RegisterUnitEvent filter
+    // rejects arg1. PreClick/PostClick themselves fire from a co-hook on
+    // FUN_BUTTON_CLICK (see there — an earlier note here claimed SuperWoW
+    // owned that vmethod, which a per-DLL literal scan disproved).
     FUN_FRAME_RUN_SCRIPT_WITH_CONTEXT = 0x00702710,
 
     // The other per-object tooltip builders, co-hooked the same way as
@@ -1777,6 +1853,23 @@ enum Offsets {
     // any visible unit, not just the local player.
     OFF_UNIT_FIELD_CHANNEL_SPELL = 0x228,
 
+    // `UNIT_FIELD_BASEATTACKTIME` (main-hand @ field 0x78, off-hand @ field
+    // 0x79) and `UNIT_FIELD_RANGEDATTACKTIME` (field 0x7A) — byte offset =
+    // field index * 4. Verified two ways: (1) the in-binary UpdateField
+    // name table at VA `0x0083A6EC` gives field index 0x78 for the string
+    // "UNIT_FIELD_BASEATTACKTIME" and 0x7A for "UNIT_FIELD_RANGEDATTACKTIME";
+    // (2) `Script_UnitAttackSpeed` (`0x00518E50`) reads `[descriptor+0x1E0]`
+    // / `[+0x1E4]` and `Script_UnitRangedDamage` (`0x00518910`) reads
+    // `[descriptor+0x1E8]` — exactly `field*4`. These already carry the
+    // player's current (hasted) swing time; the server writes the modified
+    // value directly into the broadcast field rather than sending a
+    // separate haste multiplier, so there is no client-side way to recover
+    // the UNHASTED weapon delay from these — that has to come from the
+    // weapon's own `OFF_ITEMSTATS_DELAY`. Used by `Combat::Swing`.
+    OFF_UNIT_FIELD_BASEATTACKTIME = 0x1E0,     // main-hand swing time, ms
+    OFF_UNIT_FIELD_OFFHANDATTACKTIME = 0x1E4,  // off-hand swing time, ms
+    OFF_UNIT_FIELD_RANGEDATTACKTIME = 0x1E8,   // ranged swing time, ms
+
     // Aura arrays in the unit's `m_objectFields` descriptor (at `unit
     // + OFF_CGUNIT_OBJECT_FIELDS`). 48 total auras packed as two
     // parallel sub-ranges (32 buffs, then 16 debuffs) sharing the
@@ -2005,6 +2098,53 @@ enum Offsets {
     // nil cleanly).
     FUN_SPELL_RANGE_CHECK = 0x006E47B0,
 
+    // The two floats `FUN_006e3480`'s COMBAT-RANGE branch folds into its
+    // max-range output: `casterReach + targetReach + LEEWAY`, floored at
+    // MIN. Verified by a direct float dump of the image (1.33333 / 5.0);
+    // these are the same constants tortoise-wow's server uses for the
+    // identical formula (`BASE_MELEERANGE_OFFSET = 1.33f`,
+    // `ATTACK_DISTANCE = 5.0f`, `Unit::GetCombatReach`/
+    // `Unit::CanReachWithMeleeAutoAttackAtPosition`). Read live (not
+    // hardcoded) by `Combat::SwingRange`'s DEDICATED melee range check —
+    // see that module for why it can't reuse `FUN_SPELL_RANGE_CHECK`
+    // above: that core (and every other consumer of `FUN_006e3480`, e.g.
+    // the action-bar range glow) computes full 3D distance, but the
+    // SERVER'S actual melee-attack gate
+    // (`WorldObject::CanReachWithMeleeSpellAttack`,
+    // `Unit::CanReachWithMeleeAutoAttackAtPosition`) is explicitly 2D
+    // (X/Y only) — the tortoise-wow source even comments "melee spells
+    // ignore Z-axis checks". Any Z offset between the two units makes the
+    // client's blended 3D check reject a swing the server already allows
+    // (verified in-game: rejected at 5.08yd 3D distance from center while
+    // landing hits — the standing engine mechanism for the GENERIC
+    // spell-range check was simply never asked to gate a real auto-attack
+    // decision before this feature existed, so there's nothing "engine
+    // native" to mirror for that exact semantic; mirroring the SERVER'S
+    // formula with the engine's own live constants is the closest fit).
+    VAR_MELEE_REACH_LEEWAY = 0x0080B058,
+    VAR_MELEE_REACH_MIN = 0x0080A1E8,
+
+    // Pure attackability test: `bool __thiscall(void *attacker /*ecx*/,
+    // void *target /*one stack arg, callee pops it — RET 0x4*/)`.
+    // `Script_UnitCanAttack` (`0x00516C50`) is a thin Lua wrapper over
+    // exactly this call; `FUN_006e4440` (the melee swing resolver) consults
+    // the same helper before a white hit lands. NOT `__fastcall` — verified
+    // by disassembly (`MOV ESI,[EBP+8]` reads the second unit off the
+    // stack; `MOV EDI,ECX` takes the first off ECX; both `RET`s pop 4
+    // bytes). Ghidra's decompile of the one caller renders the call as
+    // plain `FUN_00606980(this,pvVar4)`, which reads as fastcall(ecx,edx)
+    // but isn't — trust the disassembly's prologue over that pseudocode
+    // (same trap `FUN_SET_CVAR_VALUE` bit us with). Declaring this
+    // `__fastcall` sends the second arg through EDX, which the callee never
+    // reads, so it dereferences whatever garbage sits at `[ebp+8]` instead
+    // — crashed in-game (ERROR #132, `[ecx+0xA0]` off a bogus `ecx=4`).
+    //
+    // No position/range check — purely faction/state (hostility, PvP flags,
+    // stealth-detection-independent attackability). Used by `Combat::SwingRange`
+    // to gate the "can I even attack the current target" case Blizzard's
+    // `IsTargetWithinSwingRange` reports as a nil (no-check) answer.
+    FUN_UNIT_CAN_ATTACK = 0x00606980,
+
     // Spell.dbc `m_durationIndex` field — pointer into SpellDuration.dbc.
     // Verified via `FUN_004E44B0` (`0x004e44b0`) and `FUN_006EA000`
     // (`0x006ea000`), both of which read `[spellRec + 0x78]` and use
@@ -2203,6 +2343,28 @@ enum Offsets {
     // u32 targetState, u32, u32 spellId, u32 blocked. `Aura::JudgementRefresh`
     // reads through totalDamage.
     SMSG_ATTACKERSTATEUPDATE = 0x14A,
+    // hitInfo bit 2 — the swing came from the OFF hand, not main hand
+    // (tortoise-wow `HITINFO_LEFTSWING`; `Unit::AttackerStateUpdate` sets
+    // `HITINFO_NORMALSWING`(0) for `BASE_ATTACK`, this for `OFF_ATTACK`).
+    // Read by `Combat::Swing` to pick which hand a white-hit packet resets.
+    HITINFO_LEFTSWING = 0x4,
+    // `SMSG_ATTACKERSTATEUPDATE`'s `targetState` field, value 3 — the swing
+    // was parried. `Unit::AttackerStateUpdate`'s parry-haste block (server)
+    // shortens the PARRYING unit's own next-swing timer by a fixed formula
+    // when this fires with `victim == local player`; `Combat::Swing` mirrors
+    // it (tortoise-wow `VictimState::VICTIMSTATE_PARRY`).
+    VICTIMSTATE_PARRY = 3,
+
+    // Attack-start broadcast — sent when a unit begins a *melee* auto-attack
+    // (`Unit::SendMeleeAttackStart`, called from `Unit::Attack`). Body:
+    // attackerGuid(u64), victimGuid(u64) — PLAIN 64-bit GUIDs, not packed
+    // (verified against the server's own writer: `ObjectGuid`'s `ByteBuffer`
+    // operator is a raw `buf << uint64(guid.GetRawValue())`, no pack-guid
+    // mask byte). `Unit::Attack` also unconditionally
+    // `ResetAttackTimer(OFF_ATTACK)`s here — the one
+    // off-hand reset that isn't itself a white-hit or a cast — so
+    // `Combat::Swing` treats this as an OffHand reset for the local player.
+    SMSG_ATTACKSTART = 0x143,
 
     // NetClient send — `__thiscall void(void *conn, CDataStore *packet)`.
     // The outgoing counterpart of FUN_NET_MESSAGE_DISPATCH: every CMSG the
@@ -2261,6 +2423,30 @@ enum Offsets {
     VAR_FRAME_METHOD_REGISTRY = 0x00CF4D38,
     VAR_TEXTURE_METHOD_REGISTRY = 0x00CF5434,
     VAR_FONTSTRING_METHOD_REGISTRY = 0x00CF5400,
+    // Button — 39 methods (table 0x00879D00), ctx per docs/raw_methods.txt.
+    // CheckButton inherits it through the dispatcher's type walk. `Frame::
+    // ClickMask` re-registers `RegisterForClicks` here (most recent
+    // registration wins — the Texture::Desaturation mechanism) to add AnyUp /
+    // AnyDown in front of the engine's entry.
+    VAR_BUTTON_METHOD_REGISTRY = 0x00CF4E14,
+    // The engine's `Button:RegisterForClicks(...)` (Button table entry 35) —
+    // standard `int __fastcall(void *L)`. Loops `lua_isstring(L, i)` from
+    // index 2 until the first non-string, SStrCmpI's each against exactly ten
+    // literals (LeftButtonDown 0x1 / LeftButtonUp 0x100, Middle 0x2 / 0x200,
+    // Right 0x4 / 0x400, Button4 0x8 / 0x800, Button5 0x10 / 0x1000 — low
+    // byte = press, high byte = release), an unknown name contributing 0, and
+    // ASSIGNS the OR to button+0x330 via FUN_BUTTON_SET_CLICK_MASK. So a call
+    // with only unknown names (e.g. the modern "AnyUp") zeroes the mask and
+    // the button stops responding to every real click, silently — Button:Click
+    // ignores the mask, so programmatic clicks still work and hide it.
+    // `Frame::ClickMask` appends the five expansions of AnyUp / AnyDown to the
+    // Lua stack and tail-calls this, so the engine's parser, setter and error
+    // text stay in force.
+    FUN_SCRIPT_BUTTON_REGISTERFORCLICKS = 0x00782490,
+    // Button::SetClickMask — __thiscall(button, mask): writes +0x330. The
+    // ctors call it with the type default (Button 0x100 = LeftButtonUp;
+    // hyperlink button 0x500). Reference only.
+    FUN_BUTTON_SET_CLICK_MASK = 0x00779730,
     // EditBox — 48 methods (table 0x0087BB68), ctx per
     // docs/BlizzardScriptAPI.md. Backs `EditBox:SetCursorPosition` /
     // `GetCursorPosition` (`EditBox::Methods`), the modern cursor / focus /
@@ -2455,12 +2641,11 @@ enum Offsets {
     // `frame:GetFrameStrata()` — pushes the strata name string; ranked for
     // stack ordering (`Frame::MouseFoci`).
     FUN_SCRIPT_FRAME_GET_STRATA = 0x007742A0,
-    // Button OnClick dispatcher — `__thiscall(button, buttonCode)` at
-    // 0x00779540, invoking the button's OnClick slot `[button+0x4CC]`. NOTE: do
-    // NOT MinHook it — SuperWoW's click-casting inline-hooks the same prologue
-    // and a second hook corrupts the trampoline (ERROR #132). `Frame::Attributes`
-    // instead installs a normal chained OnClick on the opted-in frame. Kept as
-    // the verified dispatch reference only.
+    // (The button click dispatcher is FUN_BUTTON_CLICK, defined with the frame
+    // script slots near FUN_FRAME_RUN_SCRIPT_WITH_CONTEXT. A note here used to
+    // forbid hooking it on a SuperWoW-collision theory that a per-DLL scan has
+    // since disproved — see that definition. `Frame::Attributes` chains a normal
+    // OnClick on its opted-in frames for its own reasons, not because of it.)
     // Frame GetAlpha (own alpha, 0..1) + Region GetParent — walked by
     // Frame::Modern's GetEffectiveAlpha up the parent chain.
     FUN_SCRIPT_FRAME_GETALPHA = 0x00774DC0,
@@ -3557,6 +3742,17 @@ enum Offsets {
     // matches a spell's OFF_SPELL_RECORD_FAMILY_NAME against. Read by
     // FUN_006e6ca0 (`DAT_00cecaac = ChrClasses[classID] + 0x3c`).
     OFF_CHRCLASSES_SPELL_FAMILY = 0x3C,
+    // Non-zero when the class's slot-18 is a RELIC slot (Libram / Idol /
+    // Totem) rather than a ranged-weapon slot. The whole of
+    // Script_UnitHasRelicSlot's answer — 0x00519EAE-0x00519EC0:
+    //   mov ecx, [0x00c0def4]       ; records
+    //   mov eax, [ecx + eax*4]      ; records[classID]
+    //   mov ecx, [eax + 0x40]
+    //   test ecx, ecx / jz push_nil ; non-zero => true
+    // Last column (16) of the 17-field record; parsing the client's own
+    // ChrClasses.dbc gives 1 for PALADIN / SHAMAN / DRUID and 0 for the
+    // other six, which is exactly the relic-slot set.
+    OFF_CHRCLASSES_RELIC_SLOT = 0x40,
 
     // ChrRaces.dbc — standard 5-DWORD class shape at 0x00C0DED8,
     // records-pointer at +0x08, count at +0x0C. 29 columns,
@@ -4557,6 +4753,22 @@ enum Offsets {
     // packet (verified by disassembly: the packet build is the `edx != 0`
     // branch, the event fire the `[esp+4] == 0` branch).
     FUN_ACTION_SLOT_CHANGED_NOTIFY = 0x004E58E0,
+    // Single-slot clear — `__fastcall(uint slot0)`: writes
+    // `VAR_ACTION_TABLE[slot0] = 0` then FUN_ACTION_SLOT_CHANGED_NOTIFY(slot0,
+    // /*sendToServer=*/1, 0), so the removal goes out as CMSG_SET_ACTION_BUTTON
+    // and the server persists it.
+    FUN_ACTION_SLOT_CLEAR = 0x004E5DB0,
+    // The unlearn sweep — `__fastcall(uint spellID)`. Walks all
+    // ACTION_TABLE_MAX_SLOTS slots, resolves each through
+    // FUN_ACTION_SLOT_TO_SPELL, and FUN_ACTION_SLOT_CLEARs every slot whose
+    // spell equals `spellID`. Sole caller is the spell-removal handler
+    // FUN_005E9FE0, immediately after FUN_UNLEARN_SPELL (verified by
+    // disassembly + xrefs). Because the resolver is macro-aware — a macro slot
+    // answers with its primary-spell cache — a macro whose cache holds the
+    // unlearned spell is permanently removed from the action bar, which is why
+    // `Macro::ShowTooltip` co-hooks this to keep its DISPLAY resolution out of
+    // the comparison.
+    FUN_ACTION_BAR_PRUNE_SPELL = 0x004E5E20,
     // Count of `itemID` the player carries, as `UseAction` caches per
     // item-by-ID slot into VAR_ACTION_ITEM_COUNTS — `uint __fastcall(uint
     // itemID)`. Charged items (ItemStats `SPELL_CHARGES[0]` set) sum charges
@@ -4722,40 +4934,53 @@ enum Offsets {
     MACRO_LINE_BUFFER_SIZE = 0x400,
     EVENT_EXECUTE_CHAT_LINE = 0x188,     // fmt "%s", one macro body line
 
-    // Macro-icon database. Populated lazily by `FUN_LOAD_MACRO_ICONS`
-    // on the first `GetNumMacroIcons` call — enumerates `Interface\Icons\`
-    // for `*.blp` files plus a wildcard match, sorts, and de-dupes. Each
-    // entry is the basename (e.g. `"Ability_Kick"`) without the
-    // `Interface\Icons\` prefix; vanilla's `Script_GetMacroIconInfo`
-    // joins the prefix via sprintf before pushing. Verified by reading
-    // `Script_GetNumMacroIcons` (`0x004F19F0`) and
-    // `Script_GetMacroIconInfo` (`0x004F1A30`).
+    // Macro-icon database. One flat array of basenames, built lazily and
+    // cached for the process. Each entry is the basename with its extension
+    // truncated (e.g. `"Ability_Kick"`); `Script_GetMacroIconInfo`
+    // (`0x004F1A30`) re-joins the `Interface\Icons\` prefix with
+    // `SStrPrintf("%s%s", …)` before pushing, and pushes the EMPTY STRING
+    // (not nil) for an out-of-range index. Only `Script_GetNumMacroIcons`
+    // (`0x004F19F0`) triggers the lazy build, gated on `count == 0`.
     //
-    // Vanilla's loader has 3 enumeration passes, each with a per-file
-    // callback. The first two (`FUN_MACRO_ICON_CB_DISK`,
-    // `FUN_MACRO_ICON_CB_USER_MPQ`) prefix-filter on `"Ability_"` and
-    // `"Spell_"` — anything else (including `INV_*` item icons) is
-    // rejected. The third (`FUN_MACRO_ICON_CB_INSTALL_MPQ`) reads as
-    // extension-only filter in the disassembly (any `.blp`/`.tga` is
-    // accepted), but the engine's main icon DB ends up with zero
-    // `INV_*` entries regardless (`GetNumMacroIcons() == 746`, all
-    // `Ability_*`/`Spell_*`). Best guess: a check inside the
-    // `SStrDup`/array-append helpers downstream of all three callbacks
-    // filters them out — but the per-file callbacks themselves DO see
-    // `INV_*` filenames (verified by hook capture: 5,226 unique
-    // `INV_*` basenames flow through the callbacks per session).
+    // `FUN_LOAD_MACRO_ICONS` runs three enumeration passes, then
+    // `qsort(array, count, 4, 0x004F05E0)` + an adjacent case-insensitive
+    // `SStrCmpI` dedup (freeing the dupe and memmove-compacting), then
+    // shrinks the allocation. Every pass appends with the SAME inlined
+    // grow-and-append code — there is no shared downstream helper, so the
+    // ONLY filtering is what each callback does itself:
     //
-    // For `C_Macro::GetMacroItemIcons` we hook each callback at its
-    // entry, capture any `INV_*` filename into a DLL-owned side array,
-    // then forward to the original — dodges whichever downstream
-    // filter the engine applies and matches the parallel item-icon
-    // array 4.3.4 exposes (via `Script_GetMacroItemIcons`).
-    VAR_MACRO_ICON_COUNT = 0x00BDCC1C,          // uint32 count of loaded icons
-    VAR_MACRO_ICON_ARRAY = 0x00BDCC20,          // char ** — pointer to flat array of icon-name C strings (4-byte stride)
-    FUN_LOAD_MACRO_ICONS = 0x004F0090,          // `__cdecl()` lazy populate; no-op if already loaded
-    FUN_MACRO_ICON_CB_DISK = 0x004F0220,        // disk enumerator callback — `__fastcall(const char *fullPath)` — prefix-filtered
-    FUN_MACRO_ICON_CB_USER_MPQ = 0x004F0350,    // user-MPQ enumerator callback — `__fastcall(MpqRecord *r)` — prefix-filtered
-    FUN_MACRO_ICON_CB_INSTALL_MPQ = 0x004F04F0, // install-MPQ enumerator callback — `__fastcall(MpqRecord *r)` — extension-only filter
+    //   pass 1  FUN_MPQ_ENUM_FILES(6, "Interface\Icons\", cb, 0)
+    //           -> FUN_MACRO_ICON_CB_MPQ: skips the prefix, keeps only
+    //              `Ability_*` / `Spell_*` (SStrCmpI, length-bounded) with a
+    //              `.blp` / `.tga` extension.
+    //   pass 2  FUN_ADDON_SCAN_DISK_DIRS(<basePath>+"Interface\Icons\", "*", cb)
+    //           -> FUN_MACRO_ICON_CB_DISK_PREFIXED: same prefix + extension
+    //              test (plus a `.bz` sub-extension strip).
+    //   pass 3  FUN_ADDON_SCAN_DISK_DIRS("Interface\Icons\", "*", cb)
+    //           -> FUN_MACRO_ICON_CB_DISK_ANY: extension test ONLY.
+    //
+    // So the engine's list is all `Ability_*`/`Spell_*`
+    // (`GetNumMacroIcons() == 746`) for one reason: passes 1-2 prefix-filter,
+    // and pass 3 — the only one that doesn't — is a DISK walk over a folder
+    // that is empty on a stock install (every icon ships inside the MPQs).
+    // A loose `INV_*.blp` dropped into `Interface\Icons\` DOES enter the list,
+    // through pass 3 alone. (An earlier note here guessed a filter inside the
+    // `SStrDup`/array-append helpers downstream of all three callbacks; that
+    // was wrong — the append is inlined per callback and nothing runs between
+    // the filter and the array write.)
+    //
+    // `Macro::Icons` hooks all three at ENTRY, before each filter, so it sees
+    // every filename the engine walks — including the ~5,226 archive `INV_*`
+    // names pass 1 rejects — and sorts them into (loose|mpq) x (spell|item)
+    // buckets for the four modern `Get*MacroI*Icons` mutators. The bucket a
+    // callback feeds is therefore decided by WHICH WALKER the loader passed
+    // it to, which is what these names record.
+    VAR_MACRO_ICON_COUNT = 0x00BDCC1C,             // uint32 count of loaded icons
+    VAR_MACRO_ICON_ARRAY = 0x00BDCC20,             // char ** — flat array of icon-name C strings (4-byte stride)
+    FUN_LOAD_MACRO_ICONS = 0x004F0090,             // `__cdecl()` lazy populate; no-op once count != 0
+    FUN_MACRO_ICON_CB_MPQ = 0x004F0220,            // pass 1, ARCHIVE walk — `__fastcall(const char *archivePath)`, prefix + extension filtered; returns 1 to continue
+    FUN_MACRO_ICON_CB_DISK_PREFIXED = 0x004F0350,  // pass 2, DISK walk — `__fastcall(FindRecord *r)` (dir bit `r[4] & 0x10`, inline name at `r+8`), prefix + extension filtered
+    FUN_MACRO_ICON_CB_DISK_ANY = 0x004F04F0,       // pass 3, DISK walk — same record shape, EXTENSION ONLY (the sole route for a non-`Ability_`/`Spell_` icon)
 
     // Quest log: 16-byte-stride entry array and active count.
     // Field +0 of each entry is the questID for real quests (a category index
@@ -7982,6 +8207,15 @@ enum Offsets {
     OFF_SPELL_RECORD_ACTIVE_ICON_ID = 0x1D8,          // u32 activeIconID (→ SpellIcon.dbc) — shown while the spell's toggle is up (FUN_ACTION_SLOT_TEXTURE)
     OFF_SPELL_RECORD_ATTRIBUTES = 0x18,               // u32 (column 6, base Attributes)
     SPELL_ATTR_PASSIVE = 0x40,                        // bit 6 — always-on aura
+    // Attributes bits 2 (0x4) and 10 (0x400) — "on next melee swing" (the
+    // ability replaces the next white hit instead of sending its own attack,
+    // e.g. Heroic Strike / Maul / Raptor Strike). The CLIENT itself tests
+    // this exact combined mask: `FUN_006e3480`'s range resolver early-outs
+    // to a flat 100-yard max (`DAT_008118d4`) for any spell with `Attributes
+    // & 0x404` — verified in the disassembly. `Combat::Swing` uses the same
+    // mask on `SMSG_SPELL_GO` to know an on-next-swing cast replaced (and
+    // therefore reset) the main-hand white hit.
+    SPELL_ATTR_ON_NEXT_SWING = 0x4 | 0x400,
 
     // PreventionType (column 165) — which control-loss flag stops the cast:
     // 0 none, 1 SILENCE (UNIT_FLAG_SILENCED), 2 PACIFY (UNIT_FLAG_PACIFIED);
@@ -8014,6 +8248,12 @@ enum Offsets {
     // by more than one module, so kept here rather than redefined locally.
     SPELL_ATTR_EX_CHANNELED = 0x4 | 0x40,
     SPELL_ATTR_EX2_AUTOREPEAT_FLAG = 0x20,
+    // AttributesEx2 bit 17 — "don't reset the caster's melee/ranged
+    // auto-attack timers" (tortoise-wow `SPELL_ATTR_EX2_NOT_RESET_AUTO_ACTIONS`).
+    // Suppresses the InterruptFlags-driven swing reset below for spells like
+    // Slam / Aimed Shot that have a cast time but are meant to weave with
+    // the swing timer rather than restart it.
+    SPELL_ATTR_EX2_NOT_RESET_AUTO_ACTIONS = 0x20000,
     OFF_SPELL_RECORD_INTERRUPT_FLAGS = 0x54,          // u32 (column 21)
     // Bit 0 of InterruptFlags: the cast is interrupted when the caster moves.
     // Both the server (HandleMovementOpcodes → InterruptSpellsWithInterruptFlags,
@@ -8028,6 +8268,18 @@ enum Offsets {
     // Breath, …) cannot be interrupted by those abilities. Silence auras ignore
     // the flags (PreventionType only). Read by Spell::Interruptible.
     SPELL_INTERRUPT_FLAG_DAMAGE = 0x2,
+    // Bit 3 — server rule for "does casting this spell reset the caster's
+    // melee swing timer" (tortoise-wow `Spell::cast`:
+    // `IsMeleeAttackResetSpell() = !triggered && (InterruptFlags &
+    // SPELL_INTERRUPT_FLAG_AUTOATTACK)`, gated off by
+    // `SPELL_ATTR_EX2_NOT_RESET_AUTO_ACTIONS`). DBC-driven, so it tracks
+    // whatever spell data the server ships rather than a hardcoded spell
+    // list — verified against the client's own Spell.dbc: every plain
+    // cast-time spell (Fireball, …) carries it and resets the swing; the two
+    // vanilla exceptions that DON'T (Slam, Aimed Shot) both carry
+    // `SPELL_ATTR_EX2_NOT_RESET_AUTO_ACTIONS` instead. Read by
+    // `Combat::Swing`.
+    SPELL_INTERRUPT_FLAG_AUTOATTACK = 0x8,
     // ChannelInterruptFlags (column 23). Bit 2 is the channel analog of the
     // gate above (CHANNEL_FLAG_INTERRUPT in both cores). Verified in Spell.dbc:
     // Blizzard / Arcane Missiles 0x7C0C, non-channels 0.
